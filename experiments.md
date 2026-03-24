@@ -72,11 +72,11 @@ The loop picks the next `[ ]` experiment, runs it, records findings, and propose
 - **Result:** Cap=10 reduces miss rate from 59.6% to 48.7% (10.9pp improvement) with +19.2% byte overhead—hypothesis confirmed. Per-query breakdown: improvement ranges from 0pp (class Meta, def clean—hit file-limit) to 13.3pp (raise, return). Recommend cap=10 as production default; test cap=15-20 for marginal gains.
 
 ### E009 — cat truncation threshold (currently 500 lines)
-- **Status:** `[ ]` (blocked on E001)
+- **Status:** `[x]`
 - **Hypothesis:** Most files read by agents are <300 lines; the 500-line threshold rarely triggers.
 - **Method:** Analyze E001 session: distribution of file sizes read. What % would be truncated at 500L? At 200L? At 100L?
 - **Metric:** % of cat calls that hit the truncation threshold at each level
-- **Result:** _pending_
+- **Result:** E001 session incomplete (2 cat calls vs ~25 expected). Limited data: 50% hit 500L threshold (1/2), 100% hit 200L (2/2). Hypothesis **UNVALIDATED**—cannot conclude on <300L majority with only 2 large files (235, 613 code lines).
 
 ---
 
@@ -92,6 +92,7 @@ The loop picks the next `[ ]` experiment, runs it, records findings, and propose
 ---
 
 ## Ideas / follow-ups
+- **E001 re-run needed**: Session capture is incomplete (11/44 tool calls, 2/~25 cat calls). Re-run with improved logging to enable proper E009 validation.
 - **E008 follow-up**: Test cap=15 and cap=20 to find the sweet spot. E008 shows cap=10 has 19.2% overhead—may be room to push higher without crossing 25-30% threshold.
 - **INSIGHT from E006**: Task type affects tool mix, not total tokens. Explore task-specific compression profiles (bug fixes: optimize grep, exploration: optimize cat).
 - Adaptive truncation: compress less aggressively on second read of same file
