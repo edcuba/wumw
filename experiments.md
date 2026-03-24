@@ -141,11 +141,12 @@ The loop picks the next `[ ]` experiment, runs it, records findings, and propose
 - **Result:** Hypothesis **INVERTED**: cap=20 for broad patterns, cap=5 for specific achieves 23.1% miss rate vs cap=10's 37.8%—a 14.7pp improvement (vs 15pp target). Inverted reasoning: broad patterns (return: 17723 matches, import: 15169) inherently match frequently and benefit from higher caps; specific patterns (def __init__: 999, def save: 77) have low match counts and don't benefit from higher caps. Trade-off: broad patterns improve sharply (-17.5pp for return, -14.7pp for import) but specific patterns degrade slightly (+3-11pp). Two-tier capping with semantic-based classification (not just raw count) is viable for mixed workloads.
 
 ### E015 — Re-run cat truncation threshold analysis (E009 with fixed logging)
-- **Status:** `[ ]`
-- **Requires:** E011 complete
+- **Status:** `[x]`
+- **Requires:** E011 complete ✓
 - **Hypothesis:** >50% of cat calls in a real coding session hit files under 300 lines; 500L threshold rarely triggers.
 - **Method:** Re-run E001 with fixed session logging. Analyze distribution of file lengths across all cat calls. Compute % that would be truncated at 500L, 300L, 200L.
 - **Metric:** % of cat calls truncated at each threshold
+- **Result:** Hypothesis **REFUTED**. Of 5 cat calls to Django files: 0% under 200L, 0% under 300L (all ≥300L), 60% at/above 500L (3/5). Distribution: 0% <200L, 0% in 200-300L, 40% in 300-500L, 60% ≥500L. The 500L threshold triggers regularly on real codebases; most agent file reads target large files (utilities, models, transaction handlers) rather than small helpers. Current 500L default is appropriate for typical exploration tasks.
 
 ### E016 — cat threshold quality at 200L and 300L
 - **Status:** `[ ]`
