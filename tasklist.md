@@ -16,7 +16,7 @@
 - [x] Per-command compressor interface
 - [x] `rg`/`grep`: cap matches per file, deduplicate, limit context lines
 - [x] `cat`: strip blank lines + comments, truncate past threshold
-- [ ] `git diff`: strip metadata noise, keep hunks
+- [x] `git diff`: strip metadata noise, keep hunks
 - [ ] `git log`: limit entries
 - [ ] Generic: collapse repeated lines, truncate tail
 - [ ] Compression header: `# wumw: 1240 → 312 lines`

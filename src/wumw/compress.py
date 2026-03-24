@@ -110,6 +110,35 @@ def _compress_grep(lines: list[bytes]) -> list[bytes]:
     return result
 
 
+@register("git")
+def _compress_git(lines: list[bytes]) -> list[bytes]:
+    """
+    Dispatch git subcommand compression based on output shape.
+
+    For diff output (detected by 'diff --git' or '--- ' headers):
+    strip index metadata lines, keep all hunks.
+    """
+    # Detect diff output
+    is_diff = any(
+        l.startswith(b'diff --git') or l.startswith(b'--- ')
+        for l in lines[:20]
+    )
+    if is_diff:
+        return _compress_git_diff(lines)
+    return lines
+
+
+def _compress_git_diff(lines: list[bytes]) -> list[bytes]:
+    """Strip index metadata lines (SHA noise), keep all hunk content."""
+    result = []
+    for line in lines:
+        # index abc123..def456 100644 — pure metadata, no value to LLM
+        if line.startswith(b'index ') and b'..' in line:
+            continue
+        result.append(line)
+    return result
+
+
 @register("cat", "read")
 def _compress_cat(lines: list[bytes]) -> list[bytes]:
     """
