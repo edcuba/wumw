@@ -40,11 +40,11 @@ The loop picks the next `[ ]` experiment, runs it, records findings, and propose
 - **Result:** YES — both explanations preserved all essential facts about Atomic class (savepoints, nesting, thread-safety, __enter__/__exit__ logic). Compressed version slightly more concise; minor loss of implementation minutiae (BaseDatabaseWrapper line references) but core conceptual understanding intact.
 
 ### E005 — rg compressor: 5 matches/file cap causes missed results?
-- **Status:** `[ ]`
+- **Status:** `[x]`
 - **Hypothesis:** Capping at 5 matches per file causes the agent to miss relevant results in <10% of queries.
 - **Method:** Run 10 targeted `rg` queries on django where ground truth match count is known. Compare `wumw rg` vs raw `rg` outputs. Count queries where a relevant match was dropped.
 - **Metric:** miss rate (%)
-- **Result:** _pending_
+- **Result:** 59.6% miss rate (13,959 of 23,409 matches dropped). Hypothesis **FALSE**; cap is far more aggressive than expected. Queries: def __init__ (26%), def save (14%), def get_ (38%), import (8%), raise (46%), class Meta (79%), def clean (36%), def validate (26%), def delete (5%), return (71%).
 
 ### E006 — Task type matters: bug fix vs exploration
 - **Status:** `[ ]` (blocked on E002)
@@ -92,6 +92,7 @@ The loop picks the next `[ ]` experiment, runs it, records findings, and propose
 ---
 
 ## Ideas / follow-ups
+- **URGENT**: E005 shows 5-match/file cap drops 59% of results — likely breaks model reasoning. Recommend E008 tune to 15-20 matches/file, or test adaptive cap based on query selectivity.
 - Adaptive truncation: compress less aggressively on second read of same file
 - Token estimation via tiktoken instead of byte count
 - Test `fd`/`find` compression (directory listings)
