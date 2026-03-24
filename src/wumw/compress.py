@@ -18,6 +18,11 @@ _GREP_CONTEXT_RE = re.compile(rb'^(.+?):(\d+)-(.*)')
 MAX_MATCHES_PER_FILE = 5
 MAX_CONTEXT_LINES = 2
 
+CAT_TRUNCATE_LINES = 500
+
+# Comment prefixes recognised across common file types
+_COMMENT_PREFIXES = (b'#', b'//', b'--', b'*', b'/*')
+
 
 def register(*commands: str):
     """Decorator to register a compressor for one or more command names."""
@@ -102,6 +107,24 @@ def _compress_grep(lines: list[bytes]) -> list[bytes]:
     if not in_skipped:
         result.extend(pre_ctx_buf)
 
+    return result
+
+
+@register("cat", "read")
+def _compress_cat(lines: list[bytes]) -> list[bytes]:
+    """
+    Strip blank lines and comment-only lines, truncate past CAT_TRUNCATE_LINES.
+    """
+    result: list[bytes] = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith(_COMMENT_PREFIXES):
+            continue
+        result.append(line)
+        if len(result) >= CAT_TRUNCATE_LINES:
+            break
     return result
 
 

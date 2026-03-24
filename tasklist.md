@@ -15,7 +15,7 @@
 
 - [x] Per-command compressor interface
 - [x] `rg`/`grep`: cap matches per file, deduplicate, limit context lines
-- [ ] `cat`: strip blank lines + comments, truncate past threshold
+- [x] `cat`: strip blank lines + comments, truncate past threshold
 - [ ] `git diff`: strip metadata noise, keep hunks
 - [ ] `git log`: limit entries
 - [ ] Generic: collapse repeated lines, truncate tail
