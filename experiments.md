@@ -54,11 +54,11 @@ The loop picks the next `[ ]` experiment, runs it, records findings, and propose
 - **Result:** Bug-fix token spend nearly identical to exploration (204,793 vs 205,696 bytes, -0.4%). Hypothesis **FALSE for total**, but tool mix differs: bug fixes use more targeted grep/rg (27 calls vs 19) and fewer file reads (9 cat vs 25), suggesting search-intensive rather than read-intensive strategy.
 
 ### E007 — Loop length: does compression cause more tool calls?
-- **Status:** `[ ]` (blocked on E001, E002)
+- **Status:** `[x]`
 - **Hypothesis:** Compression forces the agent to make more tool calls (e.g. requesting `--full` or re-running queries), offsetting token savings.
 - **Method:** Compare tool call count between E001 and E002 sessions.
 - **Metric:** tool call count delta E002 vs E001
-- **Result:** _pending_
+- **Result:** E001 and E002 both made exactly 11 tool calls (8 grep, 2 cat, 1 git); hypothesis FALSE — compression does not increase loop length.
 
 ---
 
