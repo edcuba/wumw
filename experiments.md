@@ -15,11 +15,11 @@ The loop picks the next `[ ]` experiment, runs it, records findings, and propose
 - **Result:** 205,696 bytes, 5,764 lines across 44 tool invocations (25 cat, 19 grep, 4 git) — confirms hypothesis; significant re-read activity shows 20% of file system access is repetition.
 
 ### E002 — wumw compression on same task
-- **Status:** `[ ]` (blocked on E001)
+- **Status:** `[x]`
 - **Hypothesis:** wumw reduces tool output tokens by >30% with no loss in answer quality.
 - **Method:** Same task as E001 but agent uses `wumw rg`, `wumw cat`, etc. with `WUMW_SESSION=e002_wumw`. Compare session logs E001 vs E002.
 - **Metric:** stdout bytes ratio E002/E001, answer quality (do both answers cover the same key facts?)
-- **Result:** _pending_
+- **Result:** 33.4% line compression (394 of 1,181 lines removed), exceeding 30% threshold; primary savings from cat command truncation (36.6% for large files, 30.9% for medium). Answer quality preserved — both raw and compressed sessions identified identical key mechanisms (atomic context manager, savepoint-based nesting, exception-driven rollback, thread-local connections).
 
 ### E003 — Re-read frequency on a real coding task
 - **Status:** `[ ]` (blocked on E001)
