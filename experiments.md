@@ -17,8 +17,8 @@ The loop picks the next `[ ]` experiment, runs it, records findings, and propose
 ### E002 — wumw compression on same task
 - **Status:** `[ ]` (blocked on E001)
 - **Hypothesis:** wumw reduces tool output tokens by >30% with no loss in answer quality.
-- **Method:** Same task as E001 but agent uses `wumw rg`, `wumw cat`, etc. Compare session logs E001 vs E002.
-- **Metric:** stdout bytes ratio E002/E001, answer quality (human eval: same facts covered?)
+- **Method:** Same task as E001 but agent uses `wumw rg`, `wumw cat`, etc. with `WUMW_SESSION=e002_wumw`. Compare session logs E001 vs E002.
+- **Metric:** stdout bytes ratio E002/E001, answer quality (do both answers cover the same key facts?)
 - **Result:** _pending_
 
 ### E003 — Re-read frequency on a real coding task
@@ -35,20 +35,65 @@ The loop picks the next `[ ]` experiment, runs it, records findings, and propose
 ### E004 — cat compressor: comment stripping breaks model reasoning?
 - **Status:** `[ ]`
 - **Hypothesis:** Stripping comments from source files does not reduce answer quality for "how does X work" questions.
-- **Method:** Ask agent to explain a function from django that has meaningful docstrings/comments. Compare answers: raw cat vs wumw cat.
-- **Metric:** human eval: key facts preserved?
+- **Method:** Ask subagent to explain a django function that has meaningful docstrings. Run twice: once with raw `cat`, once with `wumw cat`. Compare answers for missing facts.
+- **Metric:** human eval: key facts preserved? (yes/no + what was lost)
 - **Result:** _pending_
 
 ### E005 — rg compressor: 5 matches/file cap causes missed results?
 - **Status:** `[ ]`
 - **Hypothesis:** Capping at 5 matches per file causes the agent to miss relevant results in <10% of queries.
-- **Method:** Run 10 targeted `rg` queries on django where ground truth is known. Compare wumw rg vs raw rg outputs. Count misses.
+- **Method:** Run 10 targeted `rg` queries on django where ground truth match count is known. Compare `wumw rg` vs raw `rg` outputs. Count queries where a relevant match was dropped.
 - **Metric:** miss rate (%)
+- **Result:** _pending_
+
+### E006 — Task type matters: bug fix vs exploration
+- **Status:** `[ ]` (blocked on E002)
+- **Hypothesis:** Bug fix tasks consume more tokens than exploration tasks (more file reads, less grep).
+- **Method:** Run a subagent on a real django bug (pick a closed GitHub issue with a clear fix). Compare token spend breakdown vs E001 exploration session.
+- **Metric:** bytes by command type, total bytes
+- **Result:** _pending_
+
+### E007 — Loop length: does compression cause more tool calls?
+- **Status:** `[ ]` (blocked on E001, E002)
+- **Hypothesis:** Compression forces the agent to make more tool calls (e.g. requesting `--full` or re-running queries), offsetting token savings.
+- **Method:** Compare tool call count between E001 and E002 sessions.
+- **Metric:** tool call count delta E002 vs E001
+- **Result:** _pending_
+
+---
+
+## Compressor tuning
+
+### E008 — Optimal rg match cap (currently 5/file)
+- **Status:** `[ ]` (blocked on E005)
+- **Hypothesis:** Raising the cap from 5 to 10 matches/file reduces miss rate with <20% token cost increase.
+- **Method:** Re-run E005 queries with cap=10. Compare miss rate and output size vs cap=5.
+- **Metric:** miss rate delta, output bytes delta
+- **Result:** _pending_
+
+### E009 — cat truncation threshold (currently 500 lines)
+- **Status:** `[ ]` (blocked on E001)
+- **Hypothesis:** Most files read by agents are <300 lines; the 500-line threshold rarely triggers.
+- **Method:** Analyze E001 session: distribution of file sizes read. What % would be truncated at 500L? At 200L? At 100L?
+- **Metric:** % of cat calls that hit the truncation threshold at each level
+- **Result:** _pending_
+
+---
+
+## Scaling
+
+### E010 — Larger repo: CPython
+- **Status:** `[ ]` (blocked on E002)
+- **Hypothesis:** Token savings scale with repo size — larger repos produce more grep hits, so compression ratio improves.
+- **Method:** Clone CPython into `benchmarks/cpython`. Ask same ORM-style question (adapted): *"How does CPython handle the GIL in multi-threaded I/O?"*. Run with wumw. Compare compression ratio vs E002 (django).
+- **Metric:** compression ratio (bytes saved / raw bytes), compare to E002
 - **Result:** _pending_
 
 ---
 
 ## Ideas / follow-ups
-- Test on a larger repo (CPython, Linux kernel headers)
-- Measure impact of compression on agentic loop length (# of tool calls to complete task)
-- Try adaptive truncation: compress less aggressively for files the model has flagged as important
+- Adaptive truncation: compress less aggressively on second read of same file
+- Token estimation via tiktoken instead of byte count
+- Test `fd`/`find` compression (directory listings)
+- Measure impact of compression header on model behavior — does it change how the model requests follow-up reads?
+- Per-extension cat compressor (Python: strip docstrings optionally; JSON: summarize keys)
