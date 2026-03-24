@@ -18,7 +18,7 @@
 - [x] `cat`: strip blank lines + comments, truncate past threshold
 - [x] `git diff`: strip metadata noise, keep hunks
 - [x] `git log`: limit entries
-- [ ] Generic: collapse repeated lines, truncate tail
+- [x] Generic: collapse repeated lines, truncate tail
 - [ ] Compression header: `# wumw: 1240 → 312 lines`
 - [ ] `--full` flag: bypass compression, log that it was used
 

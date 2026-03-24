@@ -22,6 +22,9 @@ CAT_TRUNCATE_LINES = 500
 
 MAX_LOG_ENTRIES = 20
 
+GENERIC_TRUNCATE_LINES = 200
+GENERIC_REPEAT_THRESHOLD = 3  # collapse runs longer than this
+
 # Comment prefixes recognised across common file types
 _COMMENT_PREFIXES = (b'#', b'//', b'--', b'*', b'/*')
 
@@ -37,6 +40,39 @@ def register(*commands: str):
 
 def _passthrough(lines: list[bytes]) -> list[bytes]:
     return lines
+
+
+def _compress_generic(lines: list[bytes]) -> list[bytes]:
+    """
+    Collapse consecutive repeated lines and truncate tail.
+
+    Runs of more than GENERIC_REPEAT_THRESHOLD identical lines are replaced by
+    a single copy followed by a note "# ... repeated N times".
+    Output is then truncated to GENERIC_TRUNCATE_LINES.
+    """
+    result: list[bytes] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        # Count consecutive identical lines
+        j = i + 1
+        while j < len(lines) and lines[j] == line:
+            j += 1
+        run = j - i
+        if run > GENERIC_REPEAT_THRESHOLD:
+            result.append(line)
+            note = f"# ... repeated {run} times\n".encode()
+            result.append(note)
+        else:
+            result.extend(lines[i:j])
+        i = j
+
+    if len(result) > GENERIC_TRUNCATE_LINES:
+        truncated = len(result) - GENERIC_TRUNCATE_LINES
+        result = result[:GENERIC_TRUNCATE_LINES]
+        result.append(f"# ... {truncated} more lines truncated\n".encode())
+
+    return result
 
 
 @register("rg", "grep")
@@ -201,7 +237,7 @@ def compress(command: str, stdout: bytes) -> tuple[bytes, int, int]:
     lines = stdout.splitlines(keepends=True)
     original = len(lines)
 
-    compressor = _REGISTRY.get(command, _passthrough)
+    compressor = _REGISTRY.get(command, _compress_generic)
     compressed_lines = compressor(lines)
 
     return b"".join(compressed_lines), original, len(compressed_lines)
