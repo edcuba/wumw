@@ -126,10 +126,11 @@ The loop picks the next `[ ]` experiment, runs it, records findings, and propose
 - **Result:** Cap=15 achieves 34.8% miss rate (< 40% ✓) but +43.2% byte overhead vs cap=5; cap=20 achieves 30.5% miss rate (< 30% ✓) but +51.7% overhead. Hypothesis PARTIALLY CONFIRMED—miss rate targets met, but overhead costs higher than expected (>35%). Key insight: every 5-point cap increase buys ~7-9pp miss rate reduction at ~15-20pp byte overhead increase. Diminishing returns suggest cap=15 is the sweet spot for practical use (good miss rate, acceptable overhead).
 
 ### E013 — Alternative rg strategy: total output line cap
-- **Status:** `[ ]`
+- **Status:** `[x]`
 - **Hypothesis:** Capping total rg output at 200 lines (across all files) gives a better miss rate than a per-file cap of 10, because it allows more results from files that are actually relevant.
 - **Method:** Implement a "total line cap" mode for the rg compressor (or simulate it in post-processing on E005 raw data). Compare miss rate vs cap=10 at same or lower byte overhead.
 - **Metric:** miss rate (%), output bytes vs cap=10
+- **Result:** Hypothesis FALSE. cap=200 total lines yields 96.3% miss rate vs cap=10's 37.8%—drastically worse. Broad patterns (return: 98.9% miss, import: 98.7%) consume the 200-line budget before specific patterns (def __init__: 80%) get results. Per-file capping is superior because it allows each file to contribute independently. Byte overhead for cap=200 is -97.1% vs cap=10's -34.5%, so total-line capping only viable for extreme compression where miss rate is acceptable. Validates per-file strategy; context-aware tiering (E014) should improve on current uniform cap=10.
 
 ### E014 — Context-aware rg cap: query pattern matters
 - **Status:** `[ ]`
