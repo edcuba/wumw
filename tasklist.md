@@ -7,7 +7,7 @@
 - [x] Session ID: read from `WUMW_SESSION` env var or generate UUID on first run, persist in `~/.wumw/session`
 - [x] Log per invocation to `~/.wumw/sessions/<session_id>.jsonl`
   - fields: `timestamp`, `session_id`, `command`, `args`, `stdout_bytes`, `stdout_lines`, `stderr_bytes`, `exit_code`
-- [ ] CLI: `wumw <command> [args...]`
+- [x] CLI: `wumw <command> [args...]`
 - [ ] Analysis script: read JSONL, report token spend by command type, re-read frequency
 
 ## Phase 2 — Compression
