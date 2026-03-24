@@ -7,7 +7,7 @@ dist/
 build/
 
 # wumw runtime
-~/.wumw/
+.wumw/
 
 # benchmark repos (cloned here but not tracked)
 benchmarks/

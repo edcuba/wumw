@@ -23,7 +23,7 @@ Logs per invocation:
 - timestamp
 - session ID (env var or auto-generated)
 
-Output: JSONL to `~/.wumw/sessions/<id>.jsonl`
+Output: JSONL to `.wumw/sessions/<id>.jsonl` (repo-local)
 
 Goal: run a few real coding tasks, then analyze which commands produce the most tokens, how often files are re-read, and where the ceiling on savings is.
 

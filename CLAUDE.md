@@ -13,8 +13,10 @@ Phase 1: instrumentation. Build passthrough wrapper that logs command + output s
 ## Conventions
 
 - Language: Python (CLI entry point via `wumw` in PATH)
-- Logs: `~/.wumw/sessions/<session_id>.jsonl`
+- Logs: `.wumw/sessions/<session_id>.jsonl` (repo-local, not in git)
+- Session ID: `.wumw/session` (repo-local)
 - Keep it simple — avoid abstractions until Phase 2
+- **Do not read or write files outside this repository.**
 
 ## Monorepo layout
 
