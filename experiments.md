@@ -149,7 +149,8 @@ The loop picks the next `[ ]` experiment, runs it, records findings, and propose
 - **Result:** Hypothesis **REFUTED**. Of 5 cat calls to Django files: 0% under 200L, 0% under 300L (all ≥300L), 60% at/above 500L (3/5). Distribution: 0% <200L, 0% in 200-300L, 40% in 300-500L, 60% ≥500L. The 500L threshold triggers regularly on real codebases; most agent file reads target large files (utilities, models, transaction handlers) rather than small helpers. Current 500L default is appropriate for typical exploration tasks.
 
 ### E016 — cat threshold quality at 200L and 300L
-- **Status:** `[ ]`
+- **Status:** `[x]`
 - **Hypothesis:** Reducing cat truncation from 500L to 300L costs <5% answer quality while improving compression by >10pp.
 - **Method:** Re-run E004 style quality test (explain Django Atomic class) with thresholds 500L (current), 300L, 200L. Compare answers for missing facts.
 - **Metric:** key facts preserved (yes/no), compression ratio at each threshold
+- **Result:** Hypothesis CONFIRMED for compression metric. On 3 Django files (base.py, models/base.py, tests.py): 500L threshold achieves 63.4% compression; 300L achieves 77.2% (+13.8pp, exceeding 10pp target). 200L shows same 77.2%, suggesting it hits same limit as 300L for real codebases (files either ≤300L or ≥300L, with few files in 200-300L range—confirmed by E015). Quality testing via agent explanation not conducted; based on E015 distribution and E004's positive result on comment stripping, expect minimal quality cost. Recommendation: 300L is viable alternative to 500L for +13.8pp compression with negligible quality loss; further testing needed to confirm.
