@@ -15,7 +15,7 @@ while [ $ITER -lt $MAX_ITER ]; do
     echo ""
     echo "=== Iteration $ITER / $MAX_ITER ==="
 
-    OUTPUT=$(claude --print < "$LOOP_PROMPT" 2>&1)
+    OUTPUT=$(claude --print --dangerously-skip-permissions < "$LOOP_PROMPT" 2>&1)
     echo "$OUTPUT"
 
     # Stop conditions
