@@ -8,7 +8,7 @@
 - [x] Log per invocation to `~/.wumw/sessions/<session_id>.jsonl`
   - fields: `timestamp`, `session_id`, `command`, `args`, `stdout_bytes`, `stdout_lines`, `stderr_bytes`, `exit_code`
 - [x] CLI: `wumw <command> [args...]`
-- [ ] Analysis script: read JSONL, report token spend by command type, re-read frequency
+- [x] Analysis script: read JSONL, report token spend by command type, re-read frequency
 
 ## Phase 2 — Compression
 
