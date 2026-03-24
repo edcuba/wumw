@@ -1,0 +1,16 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+
+# wumw runtime
+~/.wumw/
+
+# benchmark repos (cloned here but not tracked)
+benchmarks/
+
+# misc
+.DS_Store

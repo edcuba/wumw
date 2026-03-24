@@ -16,6 +16,28 @@ Phase 1: instrumentation. Build passthrough wrapper that logs command + output s
 - Logs: `~/.wumw/sessions/<session_id>.jsonl`
 - Keep it simple — avoid abstractions until Phase 2
 
+## Monorepo layout
+
+```
+wumw/
+  .venv/          # Python venv (not in git)
+  src/            # wumw package source
+  benchmarks/     # cloned benchmark repos (not in git)
+  tests/
+```
+
+## Setup
+
+Always use the local venv:
+```bash
+source .venv/bin/activate
+```
+
+If `.venv` doesn't exist, create it:
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+```
+
 ## Task tracking
 
 See `tasklist.md` for current implementation tasks.
