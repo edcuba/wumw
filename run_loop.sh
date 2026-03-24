@@ -23,7 +23,7 @@ while [ $ITER -lt $MAX_ITER ]; do
     log ""
     log "=== Iteration $ITER / $MAX_ITER === $(date)"
 
-    OUTPUT=$(claude --print --dangerously-skip-permissions < "$LOOP_PROMPT" 2>&1)
+    OUTPUT=$(claude --print --dangerously-skip-permissions --model "${WUMW_MODEL:-claude-haiku-4-5-20251001}" < "$LOOP_PROMPT" 2>&1)
     echo "$OUTPUT" | tee -a "$LOG_FILE"
 
     # Stop conditions
