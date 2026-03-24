@@ -6,6 +6,8 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from wumw.compress import compress
+
 
 def find_repo_root():
     result = subprocess.run(
@@ -30,7 +32,7 @@ def get_session_id():
     return session_id
 
 
-def log_invocation(session_id, command, args, stdout, stderr, exit_code):
+def log_invocation(session_id, command, args, stdout, stderr, exit_code, compressed_lines=None):
     log_dir = find_repo_root() / ".wumw" / "sessions"
     log_dir.mkdir(parents=True, exist_ok=True)
     entry = {
@@ -43,6 +45,8 @@ def log_invocation(session_id, command, args, stdout, stderr, exit_code):
         "stderr_bytes": len(stderr),
         "exit_code": exit_code,
     }
+    if compressed_lines is not None:
+        entry["compressed_lines"] = compressed_lines
     log_file = log_dir / f"{session_id}.jsonl"
     with log_file.open("a") as f:
         f.write(json.dumps(entry) + "\n")
@@ -58,10 +62,16 @@ def main():
     args = sys.argv[2:]
     result = subprocess.run([command] + args, capture_output=True)
 
-    log_invocation(session_id, command, args, result.stdout, result.stderr, result.returncode)
+    cmd_basename = os.path.basename(command)
+    compressed_stdout, original_lines, compressed_line_count = compress(cmd_basename, result.stdout)
 
-    if result.stdout:
-        sys.stdout.buffer.write(result.stdout)
+    log_invocation(
+        session_id, command, args, result.stdout, result.stderr, result.returncode,
+        compressed_lines=compressed_line_count if compressed_line_count != original_lines else None,
+    )
+
+    if compressed_stdout:
+        sys.stdout.buffer.write(compressed_stdout)
     if result.stderr:
         sys.stderr.buffer.write(result.stderr)
 
