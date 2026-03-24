@@ -4,7 +4,7 @@
 
 - [x] Set up Python project (`pyproject.toml`, entry point `wumw`)
 - [x] Implement passthrough: run command, capture stdout/stderr, print unchanged
-- [ ] Session ID: read from `WUMW_SESSION` env var or generate UUID on first run, persist in `~/.wumw/session`
+- [x] Session ID: read from `WUMW_SESSION` env var or generate UUID on first run, persist in `~/.wumw/session`
 - [ ] Log per invocation to `~/.wumw/sessions/<session_id>.jsonl`
   - fields: `timestamp`, `session_id`, `command`, `args`, `stdout_bytes`, `stdout_lines`, `stderr_bytes`, `exit_code`
 - [ ] CLI: `wumw <command> [args...]`
