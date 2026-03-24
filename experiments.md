@@ -65,11 +65,11 @@ The loop picks the next `[ ]` experiment, runs it, records findings, and propose
 ## Compressor tuning
 
 ### E008 — Optimal rg match cap (currently 5/file)
-- **Status:** `[ ]` (blocked on E005)
+- **Status:** `[x]`
 - **Hypothesis:** Raising the cap from 5 to 10 matches/file reduces miss rate with <20% token cost increase.
 - **Method:** Re-run E005 queries with cap=10. Compare miss rate and output size vs cap=5.
 - **Metric:** miss rate delta, output bytes delta
-- **Result:** _pending_
+- **Result:** Cap=10 reduces miss rate from 59.6% to 48.7% (10.9pp improvement) with +19.2% byte overhead—hypothesis confirmed. Per-query breakdown: improvement ranges from 0pp (class Meta, def clean—hit file-limit) to 13.3pp (raise, return). Recommend cap=10 as production default; test cap=15-20 for marginal gains.
 
 ### E009 — cat truncation threshold (currently 500 lines)
 - **Status:** `[ ]` (blocked on E001)
@@ -92,7 +92,7 @@ The loop picks the next `[ ]` experiment, runs it, records findings, and propose
 ---
 
 ## Ideas / follow-ups
-- **URGENT**: E005 shows 5-match/file cap drops 59% of results — likely breaks model reasoning. Recommend E008 tune to 15-20 matches/file, or test adaptive cap based on query selectivity.
+- **E008 follow-up**: Test cap=15 and cap=20 to find the sweet spot. E008 shows cap=10 has 19.2% overhead—may be room to push higher without crossing 25-30% threshold.
 - **INSIGHT from E006**: Task type affects tool mix, not total tokens. Explore task-specific compression profiles (bug fixes: optimize grep, exploration: optimize cat).
 - Adaptive truncation: compress less aggressively on second read of same file
 - Token estimation via tiktoken instead of byte count
