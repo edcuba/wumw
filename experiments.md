@@ -47,11 +47,11 @@ The loop picks the next `[ ]` experiment, runs it, records findings, and propose
 - **Result:** 59.6% miss rate (13,959 of 23,409 matches dropped). Hypothesis **FALSE**; cap is far more aggressive than expected. Queries: def __init__ (26%), def save (14%), def get_ (38%), import (8%), raise (46%), class Meta (79%), def clean (36%), def validate (26%), def delete (5%), return (71%).
 
 ### E006 — Task type matters: bug fix vs exploration
-- **Status:** `[ ]` (blocked on E002)
+- **Status:** `[x]`
 - **Hypothesis:** Bug fix tasks consume more tokens than exploration tasks (more file reads, less grep).
 - **Method:** Run a subagent on a real django bug (pick a closed GitHub issue with a clear fix). Compare token spend breakdown vs E001 exploration session.
 - **Metric:** bytes by command type, total bytes
-- **Result:** _pending_
+- **Result:** Bug-fix token spend nearly identical to exploration (204,793 vs 205,696 bytes, -0.4%). Hypothesis **FALSE for total**, but tool mix differs: bug fixes use more targeted grep/rg (27 calls vs 19) and fewer file reads (9 cat vs 25), suggesting search-intensive rather than read-intensive strategy.
 
 ### E007 — Loop length: does compression cause more tool calls?
 - **Status:** `[ ]` (blocked on E001, E002)
@@ -93,6 +93,7 @@ The loop picks the next `[ ]` experiment, runs it, records findings, and propose
 
 ## Ideas / follow-ups
 - **URGENT**: E005 shows 5-match/file cap drops 59% of results — likely breaks model reasoning. Recommend E008 tune to 15-20 matches/file, or test adaptive cap based on query selectivity.
+- **INSIGHT from E006**: Task type affects tool mix, not total tokens. Explore task-specific compression profiles (bug fixes: optimize grep, exploration: optimize cat).
 - Adaptive truncation: compress less aggressively on second read of same file
 - Token estimation via tiktoken instead of byte count
 - Test `fd`/`find` compression (directory listings)
