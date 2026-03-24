@@ -7,29 +7,37 @@ set -euo pipefail
 MAX_ITER=${1:-10}
 ITER=0
 LOOP_PROMPT="loop.md"
+LOG_DIR="logs"
+LOG_FILE="$LOG_DIR/loop_$(date +%Y%m%d_%H%M%S).log"
 
-echo "Starting wumw agent loop (max $MAX_ITER iterations)"
+mkdir -p "$LOG_DIR"
+
+log() {
+    echo "$1" | tee -a "$LOG_FILE"
+}
+
+log "Starting wumw agent loop (max $MAX_ITER iterations) — $LOG_FILE"
 
 while [ $ITER -lt $MAX_ITER ]; do
     ITER=$((ITER + 1))
-    echo ""
-    echo "=== Iteration $ITER / $MAX_ITER ==="
+    log ""
+    log "=== Iteration $ITER / $MAX_ITER === $(date)"
 
     OUTPUT=$(claude --print --dangerously-skip-permissions < "$LOOP_PROMPT" 2>&1)
-    echo "$OUTPUT"
+    echo "$OUTPUT" | tee -a "$LOG_FILE"
 
     # Stop conditions
     if echo "$OUTPUT" | grep -qi "all tasks are done"; then
-        echo "All tasks complete. Stopping."
+        log "All tasks complete. Stopping."
         exit 0
     fi
 
     if echo "$OUTPUT" | grep -qi "nothing to do"; then
-        echo "Nothing to do. Stopping."
+        log "Nothing to do. Stopping."
         exit 0
     fi
 
 done
 
-echo ""
-echo "Reached max iterations ($MAX_ITER). Stopping."
+log ""
+log "Reached max iterations ($MAX_ITER). Stopping."

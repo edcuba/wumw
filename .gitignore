@@ -12,5 +12,8 @@ build/
 # benchmark repos (cloned here but not tracked)
 benchmarks/
 
+# agent loop logs
+logs/
+
 # misc
 .DS_Store
