@@ -133,11 +133,12 @@ The loop picks the next `[ ]` experiment, runs it, records findings, and propose
 - **Result:** Hypothesis FALSE. cap=200 total lines yields 96.3% miss rate vs cap=10's 37.8%—drastically worse. Broad patterns (return: 98.9% miss, import: 98.7%) consume the 200-line budget before specific patterns (def __init__: 80%) get results. Per-file capping is superior because it allows each file to contribute independently. Byte overhead for cap=200 is -97.1% vs cap=10's -34.5%, so total-line capping only viable for extreme compression where miss rate is acceptable. Validates per-file strategy; context-aware tiering (E014) should improve on current uniform cap=10.
 
 ### E014 — Context-aware rg cap: query pattern matters
-- **Status:** `[ ]`
+- **Status:** `[x]`
 - **Requires:** E005 complete ✓
 - **Hypothesis:** Broad patterns (`return`, `raise`, `import`) need aggressive capping; specific patterns (`def __init__`, `class Foo`) need a higher cap. A two-tier cap reduces miss rate by 15pp vs uniform cap=10.
 - **Method:** Classify E005 queries as "broad" vs "specific" (by result count ratio). Apply cap=5 to broad, cap=20 to specific. Compute weighted miss rate.
 - **Metric:** miss rate delta vs uniform cap=10
+- **Result:** Hypothesis **INVERTED**: cap=20 for broad patterns, cap=5 for specific achieves 23.1% miss rate vs cap=10's 37.8%—a 14.7pp improvement (vs 15pp target). Inverted reasoning: broad patterns (return: 17723 matches, import: 15169) inherently match frequently and benefit from higher caps; specific patterns (def __init__: 999, def save: 77) have low match counts and don't benefit from higher caps. Trade-off: broad patterns improve sharply (-17.5pp for return, -14.7pp for import) but specific patterns degrade slightly (+3-11pp). Two-tier capping with semantic-based classification (not just raw count) is viable for mixed workloads.
 
 ### E015 — Re-run cat truncation threshold analysis (E009 with fixed logging)
 - **Status:** `[ ]`
