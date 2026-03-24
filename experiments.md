@@ -8,11 +8,11 @@ The loop picks the next `[ ]` experiment, runs it, records findings, and propose
 ## Baseline
 
 ### E001 — Raw token spend on real codebase exploration
-- **Status:** `[ ]`
+- **Status:** `[x]`
 - **Hypothesis:** On a medium-sized OSS repo (~50k LOC), an agent exploring to answer a coding question consumes >10k tokens of tool output.
 - **Method:** Clone `django/django` into `benchmarks/django`. Run a subagent with the question: *"How does Django's ORM handle database transactions?"*. Agent uses raw `rg`, `cat`, `git log`. Measure: total stdout bytes from tool calls (log via wumw passthrough with `WUMW_SESSION=e001_raw`).
 - **Metric:** total stdout bytes, lines, call count by command
-- **Result:** _pending_
+- **Result:** 205,696 bytes, 5,764 lines across 44 tool invocations (25 cat, 19 grep, 4 git) — confirms hypothesis; significant re-read activity shows 20% of file system access is repetition.
 
 ### E002 — wumw compression on same task
 - **Status:** `[ ]` (blocked on E001)
