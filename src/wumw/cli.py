@@ -32,7 +32,7 @@ def get_session_id():
     return session_id
 
 
-def log_invocation(session_id, command, args, stdout, stderr, exit_code, compressed_lines=None):
+def log_invocation(session_id, command, args, stdout, stderr, exit_code, compressed_lines=None, full=False):
     log_dir = find_repo_root() / ".wumw" / "sessions"
     log_dir.mkdir(parents=True, exist_ok=True)
     entry = {
@@ -47,6 +47,8 @@ def log_invocation(session_id, command, args, stdout, stderr, exit_code, compres
     }
     if compressed_lines is not None:
         entry["compressed_lines"] = compressed_lines
+    if full:
+        entry["full"] = True
     log_file = log_dir / f"{session_id}.jsonl"
     with log_file.open("a") as f:
         f.write(json.dumps(entry) + "\n")
@@ -54,13 +56,31 @@ def log_invocation(session_id, command, args, stdout, stderr, exit_code, compres
 
 def main():
     if len(sys.argv) < 2:
-        print("usage: wumw <command> [args...]", file=sys.stderr)
+        print("usage: wumw [--full] <command> [args...]", file=sys.stderr)
+        sys.exit(1)
+
+    full = False
+    argv = sys.argv[1:]
+    if argv[0] == "--full":
+        full = True
+        argv = argv[1:]
+
+    if not argv:
+        print("usage: wumw [--full] <command> [args...]", file=sys.stderr)
         sys.exit(1)
 
     session_id = get_session_id()
-    command = sys.argv[1]
-    args = sys.argv[2:]
+    command = argv[0]
+    args = argv[1:]
     result = subprocess.run([command] + args, capture_output=True)
+
+    if full:
+        log_invocation(session_id, command, args, result.stdout, result.stderr, result.returncode, full=True)
+        if result.stdout:
+            sys.stdout.buffer.write(result.stdout)
+        if result.stderr:
+            sys.stderr.buffer.write(result.stderr)
+        sys.exit(result.returncode)
 
     cmd_basename = os.path.basename(command)
     compressed_stdout, original_lines, compressed_line_count = compress(cmd_basename, result.stdout)
