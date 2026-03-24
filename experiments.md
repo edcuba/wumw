@@ -100,3 +100,50 @@ The loop picks the next `[ ]` experiment, runs it, records findings, and propose
 - Test `fd`/`find` compression (directory listings)
 - Measure impact of compression header on model behavior — does it change how the model requests follow-up reads?
 - Per-extension cat compressor (Python: strip docstrings optionally; JSON: summarize keys)
+
+---
+
+## Data quality
+
+### E011 — Fix session capture: why are only ~25% of calls logged?
+- **Status:** `[ ]`
+- **Hypothesis:** There is a bug in wumw session logging that causes the majority of tool calls to be dropped from the JSONL log.
+- **Method:** Inspect `cli.py` logging path. Add debug output or trace through: run a short agent session calling `wumw cat` and `wumw rg` 5 times each, then count lines in the resulting JSONL. Identify why E001 logged 11/44 calls and fix.
+- **Metric:** After fix, a 10-call session should produce exactly 10 log entries.
+
+---
+
+## Compressor tuning (continued)
+
+### E012 — rg cap=15 and cap=20 miss rate
+- **Status:** `[ ]`
+- **Requires:** E008 complete ✓
+- **Hypothesis:** cap=15 drops miss rate below 40%; cap=20 drops it below 30%, with overhead staying under 35%.
+- **Method:** Re-run the 10 E005 queries with cap=15 and cap=20. Compare miss rate and output bytes vs cap=5 (baseline) and cap=10 (E008).
+- **Metric:** miss rate (%), output bytes delta vs raw
+
+### E013 — Alternative rg strategy: total output line cap
+- **Status:** `[ ]`
+- **Hypothesis:** Capping total rg output at 200 lines (across all files) gives a better miss rate than a per-file cap of 10, because it allows more results from files that are actually relevant.
+- **Method:** Implement a "total line cap" mode for the rg compressor (or simulate it in post-processing on E005 raw data). Compare miss rate vs cap=10 at same or lower byte overhead.
+- **Metric:** miss rate (%), output bytes vs cap=10
+
+### E014 — Context-aware rg cap: query pattern matters
+- **Status:** `[ ]`
+- **Requires:** E005 complete ✓
+- **Hypothesis:** Broad patterns (`return`, `raise`, `import`) need aggressive capping; specific patterns (`def __init__`, `class Foo`) need a higher cap. A two-tier cap reduces miss rate by 15pp vs uniform cap=10.
+- **Method:** Classify E005 queries as "broad" vs "specific" (by result count ratio). Apply cap=5 to broad, cap=20 to specific. Compute weighted miss rate.
+- **Metric:** miss rate delta vs uniform cap=10
+
+### E015 — Re-run cat truncation threshold analysis (E009 with fixed logging)
+- **Status:** `[ ]`
+- **Requires:** E011 complete
+- **Hypothesis:** >50% of cat calls in a real coding session hit files under 300 lines; 500L threshold rarely triggers.
+- **Method:** Re-run E001 with fixed session logging. Analyze distribution of file lengths across all cat calls. Compute % that would be truncated at 500L, 300L, 200L.
+- **Metric:** % of cat calls truncated at each threshold
+
+### E016 — cat threshold quality at 200L and 300L
+- **Status:** `[ ]`
+- **Hypothesis:** Reducing cat truncation from 500L to 300L costs <5% answer quality while improving compression by >10pp.
+- **Method:** Re-run E004 style quality test (explain Django Atomic class) with thresholds 500L (current), 300L, 200L. Compare answers for missing facts.
+- **Metric:** key facts preserved (yes/no), compression ratio at each threshold
