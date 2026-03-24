@@ -154,3 +154,29 @@ The loop picks the next `[ ]` experiment, runs it, records findings, and propose
 - **Method:** Re-run E004 style quality test (explain Django Atomic class) with thresholds 500L (current), 300L, 200L. Compare answers for missing facts.
 - **Metric:** key facts preserved (yes/no), compression ratio at each threshold
 - **Result:** Hypothesis CONFIRMED for compression metric. On 3 Django files (base.py, models/base.py, tests.py): 500L threshold achieves 63.4% compression; 300L achieves 77.2% (+13.8pp, exceeding 10pp target). 200L shows same 77.2%, suggesting it hits same limit as 300L for real codebases (files either ≤300L or ≥300L, with few files in 200-300L range—confirmed by E015). Quality testing via agent explanation not conducted; based on E015 distribution and E004's positive result on comment stripping, expect minimal quality cost. Recommendation: 300L is viable alternative to 500L for +13.8pp compression with negligible quality loss; further testing needed to confirm.
+
+---
+
+## Pagination & outline
+
+Design rationale: agents already have `head`/`tail`/`sed` — wumw should not reinvent pagination. The goal is to prevent the agent from accidentally reading a 1500-line file in full. wumw caps initial output and appends a hint telling the agent exactly which standard shell command to use for more.
+
+**cat compressor change (implement before E017/E018):**
+- `wumw cat FILE` → first 100 lines (after comment/blank stripping), then append:
+  `# wumw: FILE has N lines total — for more: tail -n +101 FILE | head -100`
+- For `.py` files: emit a structural outline (regex over `^class ` / `^    def `) with line numbers instead of raw content, then append:
+  `# wumw: FILE has N lines — to read a section: sed -n 'START,ENDp' FILE`
+- Strip comments/blanks as before.
+
+### E017 — Implement and validate new cat compressor (100L cap + pagination hint)
+- **Status:** `[ ]`
+- **Hypothesis:** Replacing the 500L hard truncation with a 100L cap + `tail`/`sed` hint reduces initial cat bytes by >60% vs current, with no quality loss (agent navigates to what it needs).
+- **Method:** Implement the new cat compressor in `compress.py`. Run the E004-style quality task (explain Django Atomic class) using `wumw cat`. Verify: (1) initial output ≤100L, (2) hint is correct and usable, (3) agent reaches the same answer as raw. Also measure total bytes across the session including any follow-up `tail`/`sed` calls.
+- **Metric:** initial output lines, total session bytes, answer quality (key facts preserved?)
+
+### E018 — Python outline mode: does the agent navigate effectively?
+- **Status:** `[ ]`
+- **Requires:** E017 compressor changes in place
+- **Hypothesis:** For `.py` files, showing a class/method outline (line numbers) instead of raw content lets the agent navigate to relevant sections with `sed -n 'N,Mp'`, and the total bytes consumed (outline + targeted reads) is less than the old 500L truncation.
+- **Method:** Run the same Django ORM task. Compare: (a) old 500L truncation, (b) outline + agent-driven `sed` reads. Count total bytes, number of navigation calls, and whether agent finds the same key facts.
+- **Metric:** total bytes (outline + follow-up reads) vs 500L truncation, answer quality, number of sed/tail calls made
