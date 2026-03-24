@@ -92,7 +92,8 @@ The loop picks the next `[ ]` experiment, runs it, records findings, and propose
 ---
 
 ## Ideas / follow-ups
-- **E001 re-run needed**: Session capture is incomplete (11/44 tool calls, 2/~25 cat calls). Re-run with improved logging to enable proper E009 validation.
+- **E001/E009 re-run with wumw wrapper**: E001 measured internal tool invocations, not wumw calls. For proper compression metrics, re-run with agent explicitly using `wumw rg`, `wumw cat`, etc. This would enable proper validation of E009 (cat threshold frequency).
+- **Agent instrumentation**: Build a wrapper for agent tools (Explore, etc.) that auto-prefixes with wumw, so compression measurement is transparent to agent implementation.
 - **E008 follow-up**: Test cap=15 and cap=20 to find the sweet spot. E008 shows cap=10 has 19.2% overhead—may be room to push higher without crossing 25-30% threshold.
 - **INSIGHT from E006**: Task type affects tool mix, not total tokens. Explore task-specific compression profiles (bug fixes: optimize grep, exploration: optimize cat).
 - Adaptive truncation: compress less aggressively on second read of same file
@@ -106,10 +107,11 @@ The loop picks the next `[ ]` experiment, runs it, records findings, and propose
 ## Data quality
 
 ### E011 — Fix session capture: why are only ~25% of calls logged?
-- **Status:** `[ ]`
+- **Status:** `[x]`
 - **Hypothesis:** There is a bug in wumw session logging that causes the majority of tool calls to be dropped from the JSONL log.
 - **Method:** Inspect `cli.py` logging path. Add debug output or trace through: run a short agent session calling `wumw cat` and `wumw rg` 5 times each, then count lines in the resulting JSONL. Identify why E001 logged 11/44 calls and fix.
 - **Metric:** After fix, a 10-call session should produce exactly 10 log entries.
+- **Result:** **NO BUG FOUND.** Logging works correctly: 20 explicit `wumw` calls → 20 JSONL entries (10 cat, 10 rg). E001's discrepancy (11 logged vs 44 claimed) was measurement error—E001 counted internal agent tool invocations (44) but WUMW only logs explicit `wumw` prefix calls (11). Hypothesis FALSE. For future experiments, agents should use wumw-wrapped commands to enable compression measurement.
 
 ---
 
