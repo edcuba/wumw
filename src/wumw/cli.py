@@ -71,6 +71,9 @@ def main():
     )
 
     if compressed_stdout:
+        if compressed_line_count != original_lines:
+            header = f"# wumw: {original_lines} → {compressed_line_count} lines\n".encode()
+            sys.stdout.buffer.write(header)
         sys.stdout.buffer.write(compressed_stdout)
     if result.stderr:
         sys.stderr.buffer.write(result.stderr)
