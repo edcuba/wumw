@@ -2,7 +2,7 @@
 
 ## Phase 1 — Instrumentation
 
-- [ ] Set up Python project (`pyproject.toml`, entry point `wumw`)
+- [x] Set up Python project (`pyproject.toml`, entry point `wumw`)
 - [ ] Implement passthrough: run command, capture stdout/stderr, print unchanged
 - [ ] Session ID: read from `WUMW_SESSION` env var or generate UUID on first run, persist in `~/.wumw/session`
 - [ ] Log per invocation to `~/.wumw/sessions/<session_id>.jsonl`
