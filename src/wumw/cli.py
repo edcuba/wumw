@@ -1,7 +1,9 @@
+import json
 import os
 import subprocess
 import sys
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -17,13 +19,35 @@ def get_session_id():
     return session_id
 
 
+def log_invocation(session_id, command, args, stdout, stderr, exit_code):
+    log_dir = Path.home() / ".wumw" / "sessions"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    entry = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "session_id": session_id,
+        "command": command,
+        "args": args,
+        "stdout_bytes": len(stdout),
+        "stdout_lines": stdout.count(b"\n"),
+        "stderr_bytes": len(stderr),
+        "exit_code": exit_code,
+    }
+    log_file = log_dir / f"{session_id}.jsonl"
+    with log_file.open("a") as f:
+        f.write(json.dumps(entry) + "\n")
+
+
 def main():
     if len(sys.argv) < 2:
         print("usage: wumw <command> [args...]", file=sys.stderr)
         sys.exit(1)
 
-    command = sys.argv[1:]
-    result = subprocess.run(command, capture_output=True)
+    session_id = get_session_id()
+    command = sys.argv[1]
+    args = sys.argv[2:]
+    result = subprocess.run([command] + args, capture_output=True)
+
+    log_invocation(session_id, command, args, result.stdout, result.stderr, result.returncode)
 
     if result.stdout:
         sys.stdout.buffer.write(result.stdout)
