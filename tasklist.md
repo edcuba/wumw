@@ -24,5 +24,5 @@
 
 ## Phase 3 — Feedback loop
 
-- [ ] Track `--full` usage per session → compression quality signal
+- [x] Track `--full` usage per session → compression quality signal
 - [ ] Benchmark harness: run task with/without `wumw`, compare token counts + task success
