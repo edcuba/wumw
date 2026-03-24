@@ -83,11 +83,11 @@ The loop picks the next `[ ]` experiment, runs it, records findings, and propose
 ## Scaling
 
 ### E010 — Larger repo: CPython
-- **Status:** `[ ]` (blocked on E002)
+- **Status:** `[x]`
 - **Hypothesis:** Token savings scale with repo size — larger repos produce more grep hits, so compression ratio improves.
 - **Method:** Clone CPython into `benchmarks/cpython`. Ask same ORM-style question (adapted): *"How does CPython handle the GIL in multi-threaded I/O?"*. Run with wumw. Compare compression ratio vs E002 (django).
 - **Metric:** compression ratio (bytes saved / raw bytes), compare to E002
-- **Result:** _pending_
+- **Result:** CPython compression 62.9% (48,755 → 18,106 bytes); Django 25.2% (15,346 → 11,483 bytes). Hypothesis CONFIRMED for repo size, though root cause is file size rather than grep hits—CPython's large source files (ceval_gil.c: 1451L→500L = 65.5% compression) compress better than Django's smaller files under the 500-line truncation threshold.
 
 ---
 
