@@ -1,11 +1,23 @@
 import json
+import subprocess
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
 
+def find_repo_root():
+    result = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError("wumw must be run inside a git repository")
+    return Path(result.stdout.strip())
+
+
 def find_sessions_dir():
-    return Path.home() / ".wumw" / "sessions"
+    return find_repo_root() / ".wumw" / "sessions"
 
 
 def load_entries(sessions_dir):

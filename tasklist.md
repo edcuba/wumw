@@ -9,6 +9,7 @@
   - fields: `timestamp`, `session_id`, `command`, `args`, `stdout_bytes`, `stdout_lines`, `stderr_bytes`, `exit_code`
 - [x] CLI: `wumw <command> [args...]`
 - [x] Analysis script: read JSONL, report token spend by command type, re-read frequency
+- [x] Fix all paths: use repo-local `.wumw/` instead of `~/.wumw/` everywhere in source code
 
 ## Phase 2 — Compression
 

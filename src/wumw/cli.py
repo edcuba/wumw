@@ -7,10 +7,21 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
+def find_repo_root():
+    result = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError("wumw must be run inside a git repository")
+    return Path(result.stdout.strip())
+
+
 def get_session_id():
     if session := os.environ.get("WUMW_SESSION"):
         return session
-    session_file = Path.home() / ".wumw" / "session"
+    session_file = find_repo_root() / ".wumw" / "session"
     if session_file.exists():
         return session_file.read_text().strip()
     session_id = str(uuid.uuid4())
@@ -20,7 +31,7 @@ def get_session_id():
 
 
 def log_invocation(session_id, command, args, stdout, stderr, exit_code):
-    log_dir = Path.home() / ".wumw" / "sessions"
+    log_dir = find_repo_root() / ".wumw" / "sessions"
     log_dir.mkdir(parents=True, exist_ok=True)
     entry = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
