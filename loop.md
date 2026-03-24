@@ -14,7 +14,7 @@ Run `git status`. If there are unstaged or uncommitted changes:
 
 Read `tasklist.md`. Find the highest-priority incomplete task (top of the earliest incomplete phase). Do not work on Phase 2 tasks if any Phase 1 tasks remain incomplete.
 
-If all tasks are done, say so and stop.
+If all tasks are done, output the exact phrase "All tasks are done." and stop.
 
 ## 3. Do the work
 
