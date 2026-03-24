@@ -10,6 +10,7 @@ requires-python = ">=3.11"
 [project.scripts]
 wumw = "wumw.cli:main"
 wumw-analyze = "wumw.analyze:main"
+wumw-bench = "wumw.benchmark:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
