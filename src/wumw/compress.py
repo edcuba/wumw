@@ -20,6 +20,8 @@ MAX_CONTEXT_LINES = 2
 
 CAT_TRUNCATE_LINES = 500
 
+MAX_LOG_ENTRIES = 20
+
 # Comment prefixes recognised across common file types
 _COMMENT_PREFIXES = (b'#', b'//', b'--', b'*', b'/*')
 
@@ -110,6 +112,10 @@ def _compress_grep(lines: list[bytes]) -> list[bytes]:
     return result
 
 
+_GIT_LOG_SHA_RE = re.compile(rb'^commit [0-9a-f]{7,40}')
+_GIT_LOG_ONELINE_RE = re.compile(rb'^[0-9a-f]{7,40} ')
+
+
 @register("git")
 def _compress_git(lines: list[bytes]) -> list[bytes]:
     """
@@ -117,6 +123,7 @@ def _compress_git(lines: list[bytes]) -> list[bytes]:
 
     For diff output (detected by 'diff --git' or '--- ' headers):
     strip index metadata lines, keep all hunks.
+    For log output (detected by 'commit <sha>' lines): limit entries.
     """
     # Detect diff output
     is_diff = any(
@@ -125,7 +132,34 @@ def _compress_git(lines: list[bytes]) -> list[bytes]:
     )
     if is_diff:
         return _compress_git_diff(lines)
+
+    # Detect log output (standard or oneline format)
+    is_log = any(
+        _GIT_LOG_SHA_RE.match(l) or _GIT_LOG_ONELINE_RE.match(l)
+        for l in lines[:5]
+    )
+    if is_log:
+        return _compress_git_log(lines)
+
     return lines
+
+
+def _compress_git_log(lines: list[bytes]) -> list[bytes]:
+    """Limit git log output to MAX_LOG_ENTRIES commits."""
+    # Oneline format: each line is one entry
+    if lines and _GIT_LOG_ONELINE_RE.match(lines[0]):
+        return lines[:MAX_LOG_ENTRIES]
+
+    # Standard format: entries are blocks starting with "commit <sha>"
+    result: list[bytes] = []
+    entry_count = 0
+    for line in lines:
+        if _GIT_LOG_SHA_RE.match(line):
+            if entry_count >= MAX_LOG_ENTRIES:
+                break
+            entry_count += 1
+        result.append(line)
+    return result
 
 
 def _compress_git_diff(lines: list[bytes]) -> list[bytes]:
