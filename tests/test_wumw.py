@@ -226,10 +226,10 @@ class TestCatCompressor:
     def test_empty_input(self):
         assert _compress_cat([]) == []
 
-    def test_exactly_500_lines_kept(self):
-        input_lines = lines(*[f"x = {i}" for i in range(500)])
+    def test_exactly_100_lines_kept(self):
+        input_lines = lines(*[f"x = {i}" for i in range(100)])
         result = _compress_cat(input_lines)
-        assert len(result) == 500
+        assert len(result) == 100
 
 
 # ---------------------------------------------------------------------------

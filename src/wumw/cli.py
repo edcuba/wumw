@@ -83,7 +83,7 @@ def main():
         sys.exit(result.returncode)
 
     cmd_basename = os.path.basename(command)
-    compressed_stdout, original_lines, compressed_line_count = compress(cmd_basename, result.stdout)
+    compressed_stdout, original_lines, compressed_line_count = compress(cmd_basename, result.stdout, args)
 
     log_invocation(
         session_id, command, args, result.stdout, result.stderr, result.returncode,

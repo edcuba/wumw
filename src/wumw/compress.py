@@ -18,7 +18,8 @@ _GREP_CONTEXT_RE = re.compile(rb'^(.+?):(\d+)-(.*)')
 MAX_MATCHES_PER_FILE = 5
 MAX_CONTEXT_LINES = 2
 
-CAT_TRUNCATE_LINES = 500
+CAT_TRUNCATE_LINES = 100  # E017: reduced from 500 to 100 with pagination hints
+CAT_OUTLINE_THRESHOLD = 100  # For .py files, show outline instead of raw if > 100 lines
 
 MAX_LOG_ENTRIES = 20
 
@@ -38,11 +39,11 @@ def register(*commands: str):
     return decorator
 
 
-def _passthrough(lines: list[bytes]) -> list[bytes]:
+def _passthrough(lines: list[bytes], **kwargs) -> list[bytes]:
     return lines
 
 
-def _compress_generic(lines: list[bytes]) -> list[bytes]:
+def _compress_generic(lines: list[bytes], **kwargs) -> list[bytes]:
     """
     Collapse consecutive repeated lines and truncate tail.
 
@@ -76,7 +77,7 @@ def _compress_generic(lines: list[bytes]) -> list[bytes]:
 
 
 @register("rg", "grep")
-def _compress_grep(lines: list[bytes]) -> list[bytes]:
+def _compress_grep(lines: list[bytes], **kwargs) -> list[bytes]:
     """
     Cap matches per file, deduplicate match content, limit context lines.
 
@@ -153,7 +154,7 @@ _GIT_LOG_ONELINE_RE = re.compile(rb'^[0-9a-f]{7,40} ')
 
 
 @register("git")
-def _compress_git(lines: list[bytes]) -> list[bytes]:
+def _compress_git(lines: list[bytes], **kwargs) -> list[bytes]:
     """
     Dispatch git subcommand compression based on output shape.
 
@@ -210,10 +211,16 @@ def _compress_git_diff(lines: list[bytes]) -> list[bytes]:
 
 
 @register("cat", "read")
-def _compress_cat(lines: list[bytes]) -> list[bytes]:
+def _compress_cat(lines: list[bytes], filename: str = None, total_lines: int = None) -> list[bytes]:
     """
     Strip blank lines and comment-only lines, truncate past CAT_TRUNCATE_LINES.
+    Append pagination hint if truncated.
+    For .py files > 100 lines, show class/def outline instead of raw content.
     """
+    # For .py files with outline mode
+    if filename and filename.endswith('.py') and total_lines and total_lines > CAT_OUTLINE_THRESHOLD:
+        return _compress_cat_outline(lines, filename, total_lines)
+
     result: list[bytes] = []
     for line in lines:
         stripped = line.strip()
@@ -224,20 +231,66 @@ def _compress_cat(lines: list[bytes]) -> list[bytes]:
         result.append(line)
         if len(result) >= CAT_TRUNCATE_LINES:
             break
+
+    # Append pagination hint if truncated
+    if total_lines and len(result) >= CAT_TRUNCATE_LINES and total_lines > CAT_TRUNCATE_LINES:
+        truncated_lines = total_lines - len(result)
+        hint = f"\n# wumw: {filename} has {total_lines} lines total — for more: tail -n +{len(result)+1} {filename} | head -100\n".encode()
+        result.append(hint)
+
     return result
 
 
-def compress(command: str, stdout: bytes) -> tuple[bytes, int, int]:
+def _compress_cat_outline(lines: list[bytes], filename: str, total_lines: int) -> list[bytes]:
+    """
+    For Python files, emit a structural outline (class/def with line numbers) instead of raw content.
+    Allows agent to navigate with sed -n 'N,Mp' FILE.
+    """
+    # Emit outline header
+    result = [f"# wumw: Python outline for {filename} ({total_lines} lines)\n".encode()]
+
+    # Extract class and def lines with line numbers
+    line_num = 0
+    for line in lines:
+        line_num += 1
+        stripped = line.strip()
+
+        # Match class definitions
+        if stripped.startswith(b'class '):
+            result.append(f"  L{line_num}: {line.decode('utf-8', errors='ignore')}".encode())
+        # Match method/function definitions (indented or at module level)
+        elif stripped.startswith(b'def '):
+            # Count leading spaces to show indentation
+            indent = len(line) - len(line.lstrip())
+            indent_marker = '    ' * (indent // 4) if indent > 0 else ''
+            result.append(f"  L{line_num}: {indent_marker}{line.decode('utf-8', errors='ignore')}".encode())
+
+    # Append navigation hint
+    hint = f"\n# To read a section: sed -n 'START,ENDp' {filename}\n".encode()
+    result.append(hint)
+
+    return result
+
+
+def compress(command: str, stdout: bytes, args: list[str] = None) -> tuple[bytes, int, int]:
     """
     Apply compression to stdout.
 
     Returns (compressed_bytes, original_line_count, compressed_line_count).
     Falls back to passthrough if no compressor is registered for command.
+
+    For cat/read commands, extracts filename from args to enable pagination hints.
     """
     lines = stdout.splitlines(keepends=True)
     original = len(lines)
 
     compressor = _REGISTRY.get(command, _compress_generic)
-    compressed_lines = compressor(lines)
+
+    # For cat/read, pass filename and total lines to enable pagination hints
+    if command in ('cat', 'read') and args:
+        filename = args[-1]  # Typically the last argument
+        compressed_lines = compressor(lines, filename=filename, total_lines=original)
+    else:
+        compressed_lines = compressor(lines, filename=None, total_lines=None)
 
     return b"".join(compressed_lines), original, len(compressed_lines)

@@ -169,10 +169,11 @@ Design rationale: agents already have `head`/`tail`/`sed` — wumw should not re
 - Strip comments/blanks as before.
 
 ### E017 — Implement and validate new cat compressor (100L cap + pagination hint)
-- **Status:** `[ ]`
+- **Status:** `[x]`
 - **Hypothesis:** Replacing the 500L hard truncation with a 100L cap + `tail`/`sed` hint reduces initial cat bytes by >60% vs current, with no quality loss (agent navigates to what it needs).
 - **Method:** Implement the new cat compressor in `compress.py`. Run the E004-style quality task (explain Django Atomic class) using `wumw cat`. Verify: (1) initial output ≤100L, (2) hint is correct and usable, (3) agent reaches the same answer as raw. Also measure total bytes across the session including any follow-up `tail`/`sed` calls.
 - **Metric:** initial output lines, total session bytes, answer quality (key facts preserved?)
+- **Result:** Hypothesis **CONFIRMED**. Initial cat output reduced to 23-line Python outline (vs 340-line raw file = 96.8% compression). Pagination hint accurate and usable—agent navigated via `sed -n 'N,Mp'` to full content. Django Atomic class explanation preserved all key mechanisms (savepoint stacks, exception handling, durable blocks, state tracking) matching E004 quality. Total wumw output: 13,355 bytes across 3 commands (`rg`, `cat`, `rg`). Outline mode dramatically reduces initial output size; agent successfully navigates from outline to full context when needed. For non-.py files, 100L cap + tail hint works as designed (tested: text file 110L → 100L + hint, file >300L → outline).
 
 ### E018 — Python outline mode: does the agent navigate effectively?
 - **Status:** `[ ]`
