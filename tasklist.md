@@ -14,7 +14,7 @@
 ## Phase 2 — Compression
 
 - [x] Per-command compressor interface
-- [ ] `rg`/`grep`: cap matches per file, deduplicate, limit context lines
+- [x] `rg`/`grep`: cap matches per file, deduplicate, limit context lines
 - [ ] `cat`: strip blank lines + comments, truncate past threshold
 - [ ] `git diff`: strip metadata noise, keep hunks
 - [ ] `git log`: limit entries
