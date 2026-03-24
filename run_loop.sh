@@ -6,7 +6,7 @@ set -euo pipefail
 
 MAX_ITER=${1:-10}
 ITER=0
-LOOP_PROMPT="loop.md"
+LOOP_PROMPT="${LOOP_PROMPT:-loop.md}"
 LOG_DIR="logs"
 LOG_FILE="$LOG_DIR/loop_$(date +%Y%m%d_%H%M%S).log"
 

@@ -8,49 +8,71 @@ See `wumw.md` for full spec.
 
 ## Current phase
 
-Phase 1: instrumentation. Build passthrough wrapper that logs command + output size to JSONL. No compression yet.
+**Phase 2 complete.** Compression is implemented and tested. Now in experiment phase: benchmarking token savings on real codebases.
+
+## What's been built
+
+- `wumw <cmd> [args...]` — passthrough wrapper; model opts in by prefixing commands
+- Compressors: `rg`/`grep` (cap 5/file, dedup), `cat` (strip comments/blanks, truncate 500L), `git diff` (strip metadata), `git log` (cap 20), generic fallback (collapse repeats, truncate 200L)
+- `--full` flag — bypasses compression, logged
+- Compression header: `# wumw: N → M lines` prepended when output is reduced
+- `wumw-analyze` — reads JSONL logs, reports bytes by command, re-read frequency, `--full` rate
+- `wumw-bench` — runs commands with/without wumw, prints compression ratio table
+- 74 passing tests (`tests/test_wumw.py`)
 
 ## Conventions
 
 - Language: Python (CLI entry point via `wumw` in PATH)
 - Logs: `.wumw/sessions/<session_id>.jsonl` (repo-local, not in git)
-- Session ID: `.wumw/session` (repo-local)
-- Keep it simple — avoid abstractions until Phase 2
+- Session ID: `.wumw/session` (repo-local, or `WUMW_SESSION` env var)
 - **Do not read or write files outside this repository.**
 
 ## Monorepo layout
 
 ```
 wumw/
-  .venv/          # Python venv (not in git)
-  src/            # wumw package source
-  benchmarks/     # cloned benchmark repos (not in git)
+  .venv/              # Python venv (not in git)
+  src/wumw/
+    cli.py            # entry point, passthrough + logging
+    compress.py       # per-command compressors
+    analyze.py        # JSONL log analysis
+    benchmark.py      # wumw-bench comparison tool
   tests/
+    test_wumw.py      # 74 tests
+  benchmarks/         # cloned benchmark repos (not in git)
+  logs/               # agent loop logs (not in git)
 ```
 
 ## Setup
 
-Always use the local venv:
 ```bash
 source .venv/bin/activate
+# or if .venv doesn't exist:
+python3 -m venv .venv && source .venv/bin/activate && pip install -e .
 ```
 
-If `.venv` doesn't exist, create it:
+## Loops
+
+Two agent loops:
+
+**Implementation loop** (`loop.md`):
 ```bash
-python3 -m venv .venv && source .venv/bin/activate
+LOOP_PROMPT=loop.md ./run_loop.sh 10
 ```
+Picks tasks from `tasklist.md`. All Phase 1+2 tasks complete.
 
-## Task tracking
+**Experiment loop** (`experiment_loop.md`):
+```bash
+LOOP_PROMPT=experiment_loop.md ./run_loop.sh 10
+```
+Picks experiments from `experiments.md`. E001–E005 pending.
 
-See `tasklist.md` for current implementation tasks.
-
-## Agent loop
-
-See `loop.md`. Run with: `cat loop.md | claude` (or `claude < loop.md`)
+Monitor: `tail -f logs/loop_*.log`
 
 ## Key decisions
 
 - Wrapper, not pipe — model explicitly calls `wumw rg` instead of `rg`
 - Model decides when to use `wumw`, not the shell
-- `--full` flag bypasses compression (Phase 2)
+- `--full` flag bypasses compression; high `--full` rate signals compressor needs tuning
 - No ML, no AST compression in Phase 1 or 2
+- Repo-local state only (`.wumw/`) — no writes to home dir
