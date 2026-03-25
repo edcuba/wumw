@@ -182,3 +182,25 @@ Design rationale: agents already have `head`/`tail`/`sed` — wumw should not re
 - **Method:** Run the same Django ORM task. Compare: (a) old 500L truncation, (b) outline + agent-driven `sed` reads. Count total bytes, number of navigation calls, and whether agent finds the same key facts.
 - **Metric:** total bytes (outline + follow-up reads) vs 500L truncation, answer quality, number of sed/tail calls made
 - **Result:** Hypothesis **CONFIRMED**. Outline mode (100L cap + Python outline) achieves **85.2% compression** vs 500L truncation: 4,482 bytes vs 30,172 bytes. cat transaction.py: 1,167 vs 9,827 bytes (88% saving); cat base.py: 3,185 vs 20,215 bytes (84% saving). No sed/tail navigation needed for this task—the outline alone provided sufficient context. Answer quality preserved: agents can identify key mechanisms from outline line numbers and section headers. Trade-off: outline mode requires agent to navigate via `sed -n` for detailed content, vs 500L truncation's ready-made 500-line excerpts. For codebases with large source files, outline + pagination dramatically reduces initial token consumption.
+
+---
+
+## Stress testing outline + pagination
+
+### E019 — Bug fix task: does outline + sed navigation preserve correctness?
+- **Status:** `[ ]`
+- **Hypothesis:** For a concrete bug fix (needs exact argument signatures, variable names, line content), the agent navigates outline → `sed -n` to retrieve the body it needs, and produces a correct fix. Miss rate: 0 critical details missed.
+- **Method:** Pick a real Django bug: *"The Atomic.__exit__ method doesn't handle the case where connection.needs_rollback is True but savepoint is False — fix it."* Run with wumw outline mode. Observe: does the agent use `sed` to read the body? Does it produce a correct patch? Compare to running with `--full` (raw file).
+- **Metric:** agent navigates to body (yes/no), patch correctness (yes/no), total bytes vs `--full`
+
+### E020 — Outline completeness: what does the regex miss?
+- **Status:** `[ ]`
+- **Hypothesis:** The `^class` / `^    def` regex misses ≥20% of meaningful entry points: decorated methods (`@property`, `@staticmethod`, `@classmethod`), nested functions, module-level functions (not indented under a class).
+- **Method:** On 5 Django source files, compare: (a) wumw outline output, (b) manual inventory of all classes, methods, decorators, module-level functions. Count what's missing and what's spurious.
+- **Metric:** recall (% of real entry points captured), false negative categories
+
+### E021 — Non-Python files: does 100L cap + tail hint work in practice?
+- **Status:** `[ ]`
+- **Hypothesis:** For non-.py files (e.g. Django's `settings.py`-style configs, `.txt`, `.json`), the 100L cap + `tail -n +101 FILE | head -100` hint is sufficient — agents use the hint when they need more and stay within 200L total.
+- **Method:** Run an agent task that reads a non-.py config/text file >200L (e.g. Django's `CHANGELOG` or a large `urls.py`). Count: initial lines read, follow-up tail calls, total bytes.
+- **Metric:** % of tasks where agent paginates, total bytes vs no cap
