@@ -11,6 +11,8 @@ requires-python = ">=3.11"
 wumw = "wumw.cli:main"
 wumw-analyze = "wumw.analyze:main"
 wumw-bench = "wumw.benchmark:main"
+wumw-savings = "wumw.savings:main"
+wumw-task-status = "wumw.task_status:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

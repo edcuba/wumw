@@ -13,6 +13,8 @@ import pytest
 # Ensure the package is importable from the src layout
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+import wumw.savings as savings
+import wumw.state as state
 from wumw.compress import (
     compress,
     _compress_cat,
@@ -21,12 +23,18 @@ from wumw.compress import (
     _compress_git,
     _compress_git_diff,
     _compress_git_log,
+    _compress_listing,
     MAX_MATCHES_PER_FILE,
     MAX_CONTEXT_LINES,
+    CAT_OUTLINE_THRESHOLD,
     CAT_TRUNCATE_LINES,
+    GIT_DIFF_CONTEXT_LINES,
+    GIT_DIFF_REVIEW_MIN_HUNK_LINES,
+    LISTING_MAX_ENTRIES,
     MAX_LOG_ENTRIES,
     GENERIC_TRUNCATE_LINES,
     GENERIC_REPEAT_THRESHOLD,
+    is_probably_binary,
 )
 
 
@@ -43,17 +51,36 @@ def join(line_list):
     return b"".join(line_list)
 
 
-WUMW = str(Path(__file__).parent.parent / ".venv" / "bin" / "wumw")
 REPO_ROOT = Path(__file__).parent.parent
-# Logs are written to <repo_root>/.wumw/sessions/ (cli uses git rev-parse)
-LOG_DIR = REPO_ROOT / ".wumw" / "sessions"
+WUMW_CMD = [str(Path(sys.executable).with_name("wumw"))]
+BINARY_STDOUT_CMD = [
+    sys.executable,
+    "-c",
+    "import sys; sys.stdout.buffer.write(b'\\x00\\xffsame line\\n\\x01tail')",
+]
 
 
-def run_wumw(*args, env=None, input_=None):
+def log_dir():
+    return Path(os.environ["WUMW_HOME"]) / "sessions"
+
+
+def run_wumw(*args, env=None, input_=None, cwd=None):
     """Run the wumw CLI, return CompletedProcess."""
-    cmd = [WUMW] + list(args)
+    cmd = WUMW_CMD + list(args)
     merged_env = {**os.environ, **(env or {})}
-    return subprocess.run(cmd, capture_output=True, env=merged_env, input=input_)
+    return subprocess.run(
+        cmd,
+        capture_output=True,
+        cwd=cwd or REPO_ROOT,
+        env=merged_env,
+        input=input_,
+    )
+
+
+@pytest.fixture(autouse=True)
+def isolated_wumw_home(monkeypatch, tmp_path):
+    monkeypatch.setenv("WUMW_HOME", str(tmp_path / ".wumw"))
+    monkeypatch.delenv("XDG_STATE_HOME", raising=False)
 
 
 # ---------------------------------------------------------------------------
@@ -92,6 +119,24 @@ class TestPassthrough:
         assert b"out" in r.stdout
         assert b"err" in r.stderr
         assert b"err" not in r.stdout
+
+    def test_module_entrypoint_runs_main(self, tmp_path):
+        env = {**os.environ, "PYTHONPATH": str(REPO_ROOT / "src"), "WUMW_HOME": str(tmp_path / ".wumw")}
+        r = subprocess.run(
+            [sys.executable, "-m", "wumw.cli", "--full", "sh", "-c", "printf ok"],
+            capture_output=True,
+            cwd=REPO_ROOT,
+            env=env,
+        )
+        assert r.returncode == 0
+        assert r.stdout == b"ok"
+
+    def test_binary_stdout_skips_compression(self):
+        env = {"WUMW_SESSION": "test-binary-stdout"}
+        r = run_wumw(*BINARY_STDOUT_CMD, env=env)
+        assert r.returncode == 0
+        assert r.stdout == b"\x00\xffsame line\n\x01tail"
+        assert b"# wumw:" not in r.stdout
 
 
 # ---------------------------------------------------------------------------
@@ -180,6 +225,46 @@ class TestGrepCompressor:
         result = _compress_grep(input_lines)
         assert not any(b"ctx after skip" in l for l in result)
 
+    def test_adds_omission_hint_when_cap_drops_matches(self):
+        input_lines = [
+            self._make_match("file.py", i, f"match {i}")
+            for i in range(MAX_MATCHES_PER_FILE + 2)
+        ]
+        result = _compress_grep(input_lines)
+        assert b"# wumw: file.py kept 5/7 matches; 2 more matches omitted (2 over cap)\n" in result
+
+    def test_adds_omission_hint_when_duplicates_dropped(self):
+        input_lines = [
+            self._make_match("a.py", 1, "duplicate content"),
+            self._make_match("a.py", 2, "duplicate content"),
+            self._make_match("a.py", 3, "duplicate content"),
+        ]
+        result = _compress_grep(input_lines)
+        assert (
+            b"# wumw: a.py kept 1/3 matches; 2 more matches omitted (2 duplicate)\n"
+            in result
+        )
+
+    def test_omission_hint_not_added_when_nothing_dropped(self):
+        input_lines = [
+            self._make_match("a.py", 1, "hit"),
+            self._make_match("a.py", 2, "other hit"),
+        ]
+        result = _compress_grep(input_lines)
+        assert not any(line.startswith(b"# wumw: a.py kept") for line in result)
+
+    def test_respects_env_cap_override(self, monkeypatch):
+        monkeypatch.setenv("WUMW_RG_CAP", "2")
+        input_lines = [
+            self._make_match("file.py", i, f"match {i}")
+            for i in range(4)
+        ]
+        result = _compress_grep(input_lines)
+
+        count = sum(1 for l in result if l.startswith(b"file.py:"))
+        assert count == 2
+        assert b"# wumw: file.py kept 2/4 matches; 2 more matches omitted (2 over cap)\n" in result
+
 
 # ---------------------------------------------------------------------------
 # 3. cat compressor — strips comments/blanks, truncates at 500 lines
@@ -231,9 +316,51 @@ class TestCatCompressor:
         result = _compress_cat(input_lines)
         assert len(result) == 100
 
+    def test_python_outline_includes_decorators_and_doc_hint(self):
+        input_lines = lines(
+            "class Example:",
+            "    @classmethod",
+            "    def build(cls):",
+            '        """Build an instance from repo-local defaults."""',
+            "        return cls()",
+        )
+        result = _compress_cat(
+            input_lines,
+            filename="example.py",
+            total_lines=CAT_OUTLINE_THRESHOLD + 1,
+        )
+        joined = join(result)
+
+        assert b"# wumw: Python outline for example.py" in joined
+        assert b"L2:     @classmethod\n" in joined
+        assert b"L3:     def build(cls):  # doc: Build an instance from repo-local defaults.\n" in joined
+
+    def test_python_outline_uses_first_body_line_as_hint_when_no_docstring(self):
+        input_lines = lines(
+            "async def fetch_data(client, key):",
+            "    if key in client.cache:",
+            "        return client.cache[key]",
+        )
+        result = _compress_cat(
+            input_lines,
+            filename="client.py",
+            total_lines=CAT_OUTLINE_THRESHOLD + 1,
+        )
+        joined = join(result)
+
+        assert b"L1: async def fetch_data(client, key):  # if key in client.cache:\n" in joined
+
+    def test_respects_env_line_override_in_hint(self, monkeypatch):
+        monkeypatch.setenv("WUMW_CAT_LINES", "3")
+        input_lines = lines("line 1", "line 2", "line 3", "line 4", "line 5")
+        result = _compress_cat(input_lines, filename="notes.txt", total_lines=5)
+
+        assert result[:3] == lines("line 1", "line 2", "line 3")
+        assert b"head -3\n" in result[-1]
+
 
 # ---------------------------------------------------------------------------
-# 4. git diff compressor — strips metadata lines
+# 4. git diff compressor — preserves structure, shrinks oversized hunks
 # ---------------------------------------------------------------------------
 
 class TestGitDiffCompressor:
@@ -289,6 +416,108 @@ class TestGitDiffCompressor:
         ]
         result = _compress_git_diff(input_lines)
         assert any(b"index on main" in l for l in result)
+
+    def test_small_hunk_kept_in_full(self):
+        input_lines = [
+            b"diff --git a/foo.py b/foo.py\n",
+            b"index abc123..def456 100644\n",
+            b"--- a/foo.py\n",
+            b"+++ b/foo.py\n",
+            b"@@ -1,4 +1,4 @@\n",
+            b" context 1\n",
+            b"-removed\n",
+            b"+added\n",
+            b" context 2\n",
+        ]
+
+        result = _compress_git_diff(input_lines)
+
+        assert b"# ... " not in join(result)
+        assert join(result).count(b" context ") == 2
+
+    def test_large_hunk_omits_middle_context(self):
+        before = [f" context before {i}".encode() + b"\n" for i in range(12)]
+        after = [f" context after {i}".encode() + b"\n" for i in range(12)]
+        input_lines = [
+            b"diff --git a/foo.py b/foo.py\n",
+            b"index abc123..def456 100644\n",
+            b"--- a/foo.py\n",
+            b"+++ b/foo.py\n",
+            b"@@ -1,28 +1,28 @@\n",
+            *before,
+            b"-removed\n",
+            b"+added\n",
+            *after,
+        ]
+
+        result = _compress_git_diff(input_lines)
+        joined = join(result)
+
+        assert b"@@ -1,28 +1,28 @@" in joined
+        assert b"# ... " in joined
+        assert b"context before 0\n" not in joined
+        assert b"context before 11\n" in joined
+        assert b"context after 0\n" in joined
+        assert b"context after 11\n" not in joined
+        assert b"-removed\n" in joined
+        assert b"+added\n" in joined
+
+    def test_large_hunk_keeps_context_near_each_change_cluster(self):
+        shared = [f" shared {i}".encode() + b"\n" for i in range(20)]
+        input_lines = [
+            b"diff --git a/foo.py b/foo.py\n",
+            b"--- a/foo.py\n",
+            b"+++ b/foo.py\n",
+            b"@@ -1,24 +1,24 @@\n",
+            b"-first change\n",
+            b"+first replacement\n",
+            *shared,
+            b"-second change\n",
+            b"+second replacement\n",
+        ]
+
+        result = _compress_git_diff(input_lines)
+        joined = join(result)
+
+        assert joined.count(b"# ... ") == 1
+        assert f" shared {GIT_DIFF_CONTEXT_LINES - 1}\n".encode() in joined
+        assert f" shared {GIT_DIFF_CONTEXT_LINES}\n".encode() not in joined
+        tail_index = len(shared) - GIT_DIFF_CONTEXT_LINES
+        assert f" shared {tail_index}\n".encode() in joined
+        assert f" shared {tail_index - 1}\n".encode() not in joined
+
+    def test_hunk_below_review_threshold_not_compressed(self):
+        context_count = max(0, GIT_DIFF_REVIEW_MIN_HUNK_LINES - 2)
+        input_lines = [
+            b"diff --git a/foo.py b/foo.py\n",
+            b"--- a/foo.py\n",
+            b"+++ b/foo.py\n",
+            b"@@ -1,20 +1,20 @@\n",
+            *[f" context {i}".encode() + b"\n" for i in range(context_count)],
+            b"-removed\n",
+            b"+added\n",
+        ]
+
+        result = _compress_git_diff(input_lines)
+
+        assert b"# ... " not in join(result)
+
+    def test_keeps_hunk_content_that_looks_like_file_headers(self):
+        input_lines = [
+            b"diff --git a/foo.py b/foo.py\n",
+            b"--- a/foo.py\n",
+            b"+++ b/foo.py\n",
+            b"@@ -1,3 +1,3 @@\n",
+            b" context\n",
+            b"--- removed text that starts like a header\n",
+            b"+++ added text that starts like a header\n",
+        ]
+
+        result = _compress_git_diff(input_lines)
+        joined = join(result)
+
+        assert b"--- removed text that starts like a header\n" in joined
+        assert b"+++ added text that starts like a header\n" in joined
 
 
 # ---------------------------------------------------------------------------
@@ -348,9 +577,78 @@ class TestGitLogCompressor:
     def test_empty_input(self):
         assert _compress_git_log([]) == []
 
+    def test_respects_env_entry_override(self, monkeypatch):
+        monkeypatch.setenv("WUMW_GIT_LOG_ENTRIES", "3")
+        input_lines = self._make_oneline_log(8)
+        result = _compress_git_log(input_lines)
+
+        assert len(result) == 3
+
 
 # ---------------------------------------------------------------------------
-# 6. generic fallback — collapses repeated lines, truncates at 200
+# 6. fd/find/ls compressor — deduplicates and samples by extension
+# ---------------------------------------------------------------------------
+
+class TestListingCompressor:
+    def test_deduplicates_repeated_entries_under_cap(self):
+        input_lines = lines("src/app.py", "src/app.py", "README.md")
+        result = _compress_listing(input_lines)
+
+        assert result == lines("src/app.py", "README.md")
+
+    def test_groups_large_listing_by_extension_and_caps_entries(self):
+        input_lines = []
+        for i in range(LISTING_MAX_ENTRIES):
+            input_lines.append(f"src/module_{i}.py".encode() + b"\n")
+        for i in range(12):
+            input_lines.append(f"docs/page_{i}.md".encode() + b"\n")
+        for i in range(8):
+            input_lines.append(f"bin/tool_{i}".encode() + b"\n")
+        result = _compress_listing(input_lines)
+        joined = join(result)
+
+        sampled_entries = [line for line in result if not line.startswith(b"#")]
+        assert len(sampled_entries) <= LISTING_MAX_ENTRIES
+        assert b"# wumw: kept " in joined
+        assert b"# .py: " in joined
+        assert b"# .md: " in joined
+        assert b"# [no extension]: " in joined
+        assert b"more .py entries omitted" in joined
+
+    def test_passthrough_for_long_ls_format(self):
+        input_lines = lines(
+            "total 2",
+            "-rw-r--r--  1 ed  staff   10 Mar 25 10:00 file.txt",
+            "drwxr-xr-x  4 ed  staff  128 Mar 25 10:00 src",
+        )
+        result = _compress_listing(input_lines)
+        assert result == input_lines
+
+    def test_dispatches_for_fd_find_and_ls(self):
+        data = b"dup.py\ndup.py\nunique.md\n"
+        for command in ("fd", "find", "ls"):
+            compressed, orig, comp = compress(command, data)
+            assert compressed == b"dup.py\nunique.md\n"
+            assert orig == 3
+            assert comp == 2
+
+    def test_respects_env_max_entries_override(self, monkeypatch):
+        monkeypatch.setenv("WUMW_LISTING_MAX_ENTRIES", "3")
+        input_lines = lines(
+            "src/a.py",
+            "src/b.py",
+            "src/c.py",
+            "src/d.py",
+            "docs/readme.md",
+        )
+        result = _compress_listing(input_lines)
+
+        sampled_entries = [line for line in result if not line.startswith(b"#")]
+        assert len(sampled_entries) <= 3
+
+
+# ---------------------------------------------------------------------------
+# 7. generic fallback — collapses repeated lines, truncates at 200
 # ---------------------------------------------------------------------------
 
 class TestGenericCompressor:
@@ -399,9 +697,19 @@ class TestGenericCompressor:
         result = _compress_generic(repeated)
         assert str(n).encode() in b"".join(result)
 
+    def test_respects_env_repeat_and_truncate_overrides(self, monkeypatch):
+        monkeypatch.setenv("WUMW_GENERIC_REPEAT_THRESHOLD", "1")
+        monkeypatch.setenv("WUMW_GENERIC_LINES", "2")
+        input_lines = [b"same\n", b"same\n", b"tail 1\n", b"tail 2\n"]
+        result = _compress_generic(input_lines)
+
+        assert result[0] == b"same\n"
+        assert b"repeated 2 times" in result[1]
+        assert b"truncated" in result[-1]
+
 
 # ---------------------------------------------------------------------------
-# 7. --full flag — bypasses compression, raw output
+# 8. --full flag — bypasses compression, raw output
 # ---------------------------------------------------------------------------
 
 class TestFullFlag:
@@ -427,7 +735,7 @@ class TestFullFlag:
     def test_full_logs_full_field(self, tmp_path):
         """--full mode should write full=true into the JSONL log."""
         session_id = "test-full-log-field"
-        log_file = LOG_DIR / f"{session_id}.jsonl"
+        log_file = log_dir() / f"{session_id}.jsonl"
         if log_file.exists():
             log_file.unlink()
 
@@ -445,7 +753,7 @@ class TestFullFlag:
 
 class TestCompressionHeader:
     def test_header_present_when_lines_reduced(self):
-        """When compression reduces line count, a '# wumw: N → M lines' header appears."""
+        """When compression meaningfully reduces line count, a header appears."""
         env = {"WUMW_SESSION": "test-header-reduced"}
         # cat compressor strips comment and blank lines — use a file full of them
         with tempfile.NamedTemporaryFile(delete=False, suffix=".txt") as f:
@@ -457,6 +765,12 @@ class TestCompressionHeader:
             assert b"# wumw:" in r.stdout
         finally:
             os.unlink(tmpname)
+
+    def test_header_absent_when_reduction_is_tiny(self):
+        """Tiny reductions should stay silent to avoid adding context noise."""
+        env = {"WUMW_SESSION": "test-header-small-reduction"}
+        r = run_wumw("sh", "-c", "printf 'same\\nsame\\nsame\\nsame\\nkeep\\n'", env=env)
+        assert b"# wumw:" not in r.stdout
 
     def test_header_absent_when_no_reduction(self):
         """When output is not reduced, the header should not appear."""
@@ -484,6 +798,14 @@ class TestCompressionHeader:
         finally:
             os.unlink(tmpname)
 
+    def test_header_threshold_can_be_overridden_by_env(self):
+        env = {
+            "WUMW_SESSION": "test-header-env-override",
+            "WUMW_HEADER_MIN_SAVED": "1",
+        }
+        r = run_wumw("sh", "-c", "printf 'same\\nsame\\nsame\\nsame\\nkeep\\n'", env=env)
+        assert b"# wumw:" in r.stdout
+
 
 # ---------------------------------------------------------------------------
 # 9. JSONL logging — correct fields written to .wumw/sessions/
@@ -492,7 +814,7 @@ class TestCompressionHeader:
 class TestJsonlLogging:
     def _run_and_read_log(self, *args, extra_env=None):
         session_id = f"test-log-{os.getpid()}-{id(args)}"
-        log_file = LOG_DIR / f"{session_id}.jsonl"
+        log_file = log_dir() / f"{session_id}.jsonl"
         if log_file.exists():
             log_file.unlink()
 
@@ -513,13 +835,32 @@ class TestJsonlLogging:
 
     def test_log_has_session_id(self):
         session_id = f"test-log-session-{os.getpid()}"
-        log_file = LOG_DIR / f"{session_id}.jsonl"
+        log_file = log_dir() / f"{session_id}.jsonl"
         if log_file.exists():
             log_file.unlink()
         env = {"WUMW_SESSION": session_id}
         run_wumw("true", env=env)
         entries = [json.loads(l) for l in log_file.read_text().splitlines() if l.strip()]
         assert entries[-1]["session_id"] == session_id
+
+    def test_log_includes_session_context_fields(self):
+        entries = self._run_and_read_log("true")
+        entry = entries[-1]
+        assert "session_started_at" in entry
+        assert entry["cwd"] == str(REPO_ROOT)
+        assert entry["context_root"] == str(REPO_ROOT)
+        assert entry["in_git_repo"] is True
+
+    def test_codex_thread_id_becomes_session_id(self):
+        thread_id = f"thread-{os.getpid()}"
+        log_file = log_dir() / f"{thread_id}.jsonl"
+        if log_file.exists():
+            log_file.unlink()
+
+        run_wumw("true", env={"CODEX_THREAD_ID": thread_id})
+
+        entries = [json.loads(l) for l in log_file.read_text().splitlines() if l.strip()]
+        assert entries[-1]["session_id"] == thread_id
 
     def test_log_has_command(self):
         entries = self._run_and_read_log("true")
@@ -537,6 +878,14 @@ class TestJsonlLogging:
         entries = self._run_and_read_log("sh", "-c", "printf hello")
         assert "stdout_bytes" in entries[-1]
         assert entries[-1]["stdout_bytes"] == 5
+
+    def test_log_has_estimated_tokens(self):
+        entries = self._run_and_read_log("sh", "-c", "printf hello")
+        assert entries[-1]["estimated_tokens"] == 2
+
+    def test_log_estimated_tokens_zero_for_empty_stdout(self):
+        entries = self._run_and_read_log("true")
+        assert entries[-1]["estimated_tokens"] == 0
 
     def test_log_has_stdout_lines(self):
         entries = self._run_and_read_log("sh", "-c", "printf 'a\\nb\\nc\\n'")
@@ -570,9 +919,13 @@ class TestJsonlLogging:
         finally:
             os.unlink(tmpname)
 
+    def test_log_compressed_lines_absent_for_binary_stdout(self):
+        entries = self._run_and_read_log(*BINARY_STDOUT_CMD)
+        assert "compressed_lines" not in entries[-1]
+
     def test_log_appends_multiple_entries(self):
         session_id = f"test-log-append-{os.getpid()}"
-        log_file = LOG_DIR / f"{session_id}.jsonl"
+        log_file = log_dir() / f"{session_id}.jsonl"
         if log_file.exists():
             log_file.unlink()
         env = {"WUMW_SESSION": session_id}
@@ -584,6 +937,121 @@ class TestJsonlLogging:
     def test_log_full_field_absent_without_flag(self):
         entries = self._run_and_read_log("true")
         assert "full" not in entries[-1]
+
+
+class TestStateFallback:
+    def test_cli_works_outside_git_repo_with_xdg_state_home(self, tmp_path):
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        state_home = tmp_path / "state-home"
+
+        r = run_wumw(
+            "--full",
+            "echo",
+            "ok",
+            cwd=outside,
+            env={"WUMW_HOME": "", "XDG_STATE_HOME": str(state_home)},
+        )
+
+        assert r.returncode == 0
+        assert r.stdout == b"ok\n"
+        sessions = list((state_home / "wumw").rglob("*.jsonl"))
+        assert sessions
+
+    def test_get_state_dir_prefers_repo_local_when_writable(self, monkeypatch, tmp_path):
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+        monkeypatch.delenv("WUMW_HOME", raising=False)
+        monkeypatch.setattr(state, "find_repo_root", lambda: repo_root)
+
+        state_dir = state.get_state_dir()
+
+        assert state_dir == repo_root / ".wumw"
+
+    def test_get_state_dir_falls_back_when_repo_state_not_writable(self, monkeypatch, tmp_path):
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+        state_home = tmp_path / "state-home"
+        monkeypatch.delenv("WUMW_HOME", raising=False)
+        monkeypatch.setattr(state, "find_repo_root", lambda: repo_root)
+        monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
+        original_ensure_dir = state._ensure_dir
+
+        def fake_ensure_dir(path):
+            if path == repo_root / ".wumw":
+                return False
+            return original_ensure_dir(path)
+
+        monkeypatch.setattr(state, "_ensure_dir", fake_ensure_dir)
+
+        state_dir = state.get_state_dir()
+
+        assert state_dir != repo_root / ".wumw"
+        assert state_dir.parent == state_home / "wumw"
+
+    def test_get_state_dir_falls_back_to_temp_when_default_state_unwritable(self, monkeypatch, tmp_path):
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+        state_home = tmp_path / "state-home"
+        temp_dir = tmp_path / "tmp-state"
+        default_state_dir = state_home / "wumw" / "repo-default"
+        monkeypatch.delenv("WUMW_HOME", raising=False)
+        monkeypatch.setattr(state, "find_repo_root", lambda: repo_root)
+        monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
+        monkeypatch.setattr(state.tempfile, "gettempdir", lambda: str(temp_dir))
+        original_ensure_dir = state._ensure_dir
+
+        def fake_ensure_dir(path):
+            if path in {repo_root / ".wumw", default_state_dir}:
+                return False
+            return original_ensure_dir(path)
+
+        monkeypatch.setattr(state, "_fallback_state_dir", lambda *_: default_state_dir)
+        monkeypatch.setattr(state, "_ensure_dir", fake_ensure_dir)
+
+        state_dir = state.get_state_dir()
+
+        assert state_dir.parent == temp_dir / "wumw"
+
+    def test_get_session_info_uses_explicit_wumw_home(self, monkeypatch, tmp_path):
+        wumw_home = tmp_path / "custom-state"
+        monkeypatch.setenv("WUMW_HOME", str(wumw_home))
+        monkeypatch.delenv("WUMW_SESSION", raising=False)
+        monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+
+        session_info = state.get_session_info()
+
+        assert session_info["session_id"]
+        assert (wumw_home / "session").exists()
+
+    def test_get_session_info_uses_codex_thread_id_without_persisting_session_file(
+        self, monkeypatch, tmp_path
+    ):
+        wumw_home = tmp_path / "custom-state"
+        monkeypatch.setenv("WUMW_HOME", str(wumw_home))
+        monkeypatch.delenv("WUMW_SESSION", raising=False)
+        monkeypatch.setenv("CODEX_THREAD_ID", "codex-thread-123")
+
+        session_info = state.get_session_info()
+
+        assert session_info["session_id"] == "codex-thread-123"
+        assert not (wumw_home / "session").exists()
+
+    def test_get_session_info_rotates_after_idle_timeout(self, monkeypatch, tmp_path):
+        wumw_home = tmp_path / "custom-state"
+        monkeypatch.setenv("WUMW_HOME", str(wumw_home))
+        monkeypatch.delenv("WUMW_SESSION", raising=False)
+        monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+
+        first = state.get_session_info()
+        session_file = wumw_home / "session"
+        record = json.loads(session_file.read_text())
+        record["last_used_at"] = "2000-01-01T00:00:00+00:00"
+        session_file.write_text(json.dumps(record))
+
+        rotated = state.get_session_info()
+
+        assert rotated["session_id"] != first["session_id"]
 
 
 # ---------------------------------------------------------------------------
@@ -632,3 +1100,144 @@ class TestCompressAPI:
         assert compressed == b""
         assert orig == 0
         assert comp == 0
+
+    def test_binary_output_uses_passthrough(self):
+        data = b"\x00\xffsame line\n\x01tail"
+        compressed, orig, comp = compress("cat", data)
+        assert compressed == data
+        assert orig == comp == 2
+
+    def test_binary_detector_ignores_utf8_text(self):
+        assert is_probably_binary("caf\u00e9\nna\u00efve\n".encode("utf-8")) is False
+
+    def test_binary_detector_flags_binary_like_bytes(self):
+        assert is_probably_binary(b"\x00\xffsame line\n\x01tail") is True
+
+
+class TestSavings:
+    def test_summarize_savings_accounts_for_compressed_and_full_entries(self):
+        entries = [
+            {
+                "command": "cat",
+                "stdout_lines": 100,
+                "compressed_lines": 10,
+                "stdout_bytes": 1000,
+            },
+            {
+                "command": "rg",
+                "stdout_lines": 20,
+                "compressed_lines": 5,
+                "stdout_bytes": 200,
+            },
+            {
+                "command": "git",
+                "stdout_lines": 30,
+                "stdout_bytes": 300,
+                "full": True,
+            },
+        ]
+
+        summary = savings.summarize_savings(entries)
+
+        assert summary["total_calls"] == 3
+        assert summary["compressed_calls"] == 2
+        assert summary["full_calls"] == 1
+        assert summary["raw_lines"] == 150
+        assert summary["effective_lines"] == 45
+        assert summary["saved_lines"] == 105
+        assert summary["line_savings_pct"] == pytest.approx(70.0)
+        assert summary["raw_bytes"] == 1500
+        assert summary["effective_bytes_estimate"] == pytest.approx(450.0)
+        assert summary["saved_bytes_estimate"] == pytest.approx(1050.0)
+        assert summary["saved_tokens_estimate"] == pytest.approx(262.5)
+        assert [row["command"] for row in summary["by_command"]] == ["cat", "rg", "git"]
+
+    def test_summarize_savings_uses_raw_output_when_not_compressed(self):
+        entries = [
+            {
+                "command": "cat",
+                "stdout_lines": 0,
+                "stdout_bytes": 0,
+            },
+            {
+                "command": "git",
+                "stdout_lines": 10,
+                "stdout_bytes": 100,
+            },
+        ]
+
+        summary = savings.summarize_savings(entries)
+
+        assert summary["effective_lines"] == 10
+        assert summary["saved_lines"] == 0
+        assert summary["effective_bytes_estimate"] == pytest.approx(100.0)
+
+    def test_summarize_groups_breaks_down_by_session(self):
+        entries = [
+            {
+                "timestamp": "2026-03-25T10:00:00+00:00",
+                "session_id": "session-a",
+                "command": "cat",
+                "stdout_lines": 10,
+                "compressed_lines": 5,
+                "stdout_bytes": 100,
+            },
+            {
+                "timestamp": "2026-03-25T11:00:00+00:00",
+                "session_id": "session-b",
+                "command": "rg",
+                "stdout_lines": 20,
+                "compressed_lines": 10,
+                "stdout_bytes": 200,
+            },
+        ]
+
+        rows = savings.summarize_groups(
+            entries,
+            key_fn=lambda entry: entry["session_id"],
+            bytes_per_token=4.0,
+        )
+
+        assert [row["key"] for row in rows] == ["session-a", "session-b"]
+        assert rows[0]["summary"]["saved_tokens_estimate"] == pytest.approx(12.5)
+        assert rows[1]["summary"]["saved_tokens_estimate"] == pytest.approx(25.0)
+
+    def test_load_entries_applies_since_and_until_filters(self, tmp_path):
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+        (sessions_dir / "demo.jsonl").write_text(
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "timestamp": "2026-03-25T09:00:00+00:00",
+                            "session_id": "demo",
+                            "command": "cat",
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "timestamp": "2026-03-25T12:00:00+00:00",
+                            "session_id": "demo",
+                            "command": "rg",
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "timestamp": "2026-03-25T15:00:00+00:00",
+                            "session_id": "demo",
+                            "command": "git",
+                        }
+                    ),
+                ]
+            )
+            + "\n"
+        )
+
+        entries = savings.load_entries(
+            sessions_dir,
+            since=savings.parse_datetime("2026-03-25T10:00:00+00:00"),
+            until=savings.parse_datetime("2026-03-25T13:00:00+00:00"),
+        )
+
+        assert [entry["command"] for entry in entries] == ["rg"]
