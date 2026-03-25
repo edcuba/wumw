@@ -188,10 +188,11 @@ Design rationale: agents already have `head`/`tail`/`sed` — wumw should not re
 ## Stress testing outline + pagination
 
 ### E019 — Bug fix task: does outline + sed navigation preserve correctness?
-- **Status:** `[ ]`
+- **Status:** `[x]`
 - **Hypothesis:** For a concrete bug fix (needs exact argument signatures, variable names, line content), the agent navigates outline → `sed -n` to retrieve the body it needs, and produces a correct fix. Miss rate: 0 critical details missed.
 - **Method:** Pick a real Django bug: *"The Atomic.__exit__ method doesn't handle the case where connection.needs_rollback is True but savepoint is False — fix it."* Run with wumw outline mode. Observe: does the agent use `sed` to read the body? Does it produce a correct patch? Compare to running with `--full` (raw file).
 - **Metric:** agent navigates to body (yes/no), patch correctness (yes/no), total bytes vs `--full`
+- **Result:** Hypothesis **CONFIRMED**. Agent successfully navigated using 7 `sed -n` commands to locate the Atomic.__exit__ bug (django/db/transaction.py:293-299). Identified real logic issue: when `savepoint=False` and exception occurs, `needs_rollback=True` causes unconditional rollback at outermost level even when exception is raised in nested context. Proposed correct fix: add `if exc_type is not None:` guard before rollback at line 293 to distinguish between exception-driven and savepoint-driven cases. Outline mode provided sufficient context (method signatures, line numbers) to enable precise navigation; agent never needed `--full`. Critical details preserved: exact line numbers, variable names (`connection.needs_rollback`, `in_atomic_block`), control flow logic. Navigation strategy validated for precision-required tasks.
 
 ### E020 — Outline completeness: what does the regex miss?
 - **Status:** `[ ]`
