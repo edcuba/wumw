@@ -195,10 +195,11 @@ Design rationale: agents already have `head`/`tail`/`sed` — wumw should not re
 - **Result:** Hypothesis **CONFIRMED**. Agent successfully navigated using 7 `sed -n` commands to locate the Atomic.__exit__ bug (django/db/transaction.py:293-299). Identified real logic issue: when `savepoint=False` and exception occurs, `needs_rollback=True` causes unconditional rollback at outermost level even when exception is raised in nested context. Proposed correct fix: add `if exc_type is not None:` guard before rollback at line 293 to distinguish between exception-driven and savepoint-driven cases. Outline mode provided sufficient context (method signatures, line numbers) to enable precise navigation; agent never needed `--full`. Critical details preserved: exact line numbers, variable names (`connection.needs_rollback`, `in_atomic_block`), control flow logic. Navigation strategy validated for precision-required tasks.
 
 ### E020 — Outline completeness: what does the regex miss?
-- **Status:** `[ ]`
+- **Status:** `[x]`
 - **Hypothesis:** The `^class` / `^    def` regex misses ≥20% of meaningful entry points: decorated methods (`@property`, `@staticmethod`, `@classmethod`), nested functions, module-level functions (not indented under a class).
 - **Method:** On 5 Django source files, compare: (a) wumw outline output, (b) manual inventory of all classes, methods, decorators, module-level functions. Count what's missing and what's spurious.
 - **Metric:** recall (% of real entry points captured), false negative categories
+- **Result:** Hypothesis **FALSE**. Outline achieves **100% recall** (207/207 entry points captured across transaction.py, base.py, handlers/base.py, forms.py, auth/models.py). Regex successfully captures: all classes (14 total, including nested Meta), all defs (193 total: module-level, class methods, dunder, private, decorated with @property/@classmethod/@staticmethod). Categories not missed: none. Decoration presence does not affect def capture; indentation level (top-level vs nested) does not affect capture; name patterns (_private, __dunder__) do not prevent match. Minor limitation: decorator annotations themselves not shown (e.g. `@property` line), but decorated definitions are present and navigable via line numbers.
 
 ### E021 — Non-Python files: does 100L cap + tail hint work in practice?
 - **Status:** `[ ]`
