@@ -2,34 +2,99 @@
 
 A shell command wrapper that compresses tool output before it enters LLM context, reducing token churn in agentic coding sessions.
 
+The model opts in by prefixing commands with `wumw`. Output is compressed and a `# wumw: N → M lines` header is prepended when reduction occurs.
+
+## What it does
+
+| Command | Compression strategy |
+|---|---|
+| `wumw cat file.py` | Python files: emit class/def outline with line numbers; other files: first 100 lines + `tail` hint |
+| `wumw rg pattern src/` | Cap 5 matches/file, deduplicate, limit context lines |
+| `wumw git diff` | Strip index metadata lines |
+| `wumw git log` | Cap at 20 entries |
+| anything else | Collapse repeated lines, truncate at 200 lines |
+
+`wumw --full <cmd>` bypasses compression and logs the bypass.
+
+## Install
+
 ```bash
-wumw rg "pattern" src/
-wumw cat bigfile.py
-wumw git diff HEAD~1
+git clone git@github.com:edcuba/wumw.git
+cd wumw
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e .
 ```
-
-The model opts in by prefixing commands with `wumw`. Output is passed through unchanged in Phase 1 (instrumentation). Phase 2 adds compression. Phase 3 adds a feedback loop.
-
-See [wumw.md](wumw.md) for full spec.
-
-## Status
-
-Phase 1 — instrumentation (in progress)
 
 ## Usage
 
 ```bash
-# install
-pip install -e .
-
-# use in place of any command
-wumw rg "TODO" src/
+# drop-in prefix for any command
 wumw cat src/main.py
+wumw rg "TODO" src/
 wumw git log --oneline
+wumw git diff HEAD~1
 
-# new session
-export WUMW_SESSION=$(wumw session new)
+# bypass compression when you need the full output
+wumw --full cat src/bigfile.py
 
-# analyze a session
-wumw session report
+# analyze session logs
+wumw-analyze
+
+# benchmark compression ratio on a codebase
+wumw-bench
+```
+
+## Use with Claude Code
+
+Add to your project's `.claude/settings.json` to let Claude use wumw automatically:
+
+```json
+{
+  "env": {
+    "PATH": "/path/to/wumw/.venv/bin:${PATH}"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(wumw:*)"
+    ]
+  }
+}
+```
+
+Then instruct Claude in `CLAUDE.md`:
+
+```markdown
+Prefer `wumw cat`, `wumw rg`, and `wumw git` over bare commands to reduce context size.
+```
+
+Claude will prefix commands with `wumw` and navigate Python files via `sed -n 'N,Mp'` using the outline hints.
+
+## Use with Codex (OpenAI)
+
+Add to your repo's `AGENTS.md`:
+
+```markdown
+## Tool usage
+Prefix file reads and searches with `wumw` to reduce context size:
+- `wumw cat file.py` instead of `cat file.py`
+- `wumw rg pattern src/` instead of `rg pattern src/`
+- `wumw git diff` instead of `git diff`
+
+For Python files, `wumw cat` returns a class/method outline with line numbers.
+Use `sed -n 'START,ENDp' file.py` to read specific sections.
+```
+
+## Session logs
+
+wumw logs every invocation to `.wumw/sessions/<session_id>.jsonl` (gitignored).
+
+```bash
+wumw-analyze              # summary: bytes by command, re-read rate, --full rate
+wumw-analyze --session X  # specific session
+```
+
+## Benchmark
+
+```bash
+wumw-bench                # runs commands with/without wumw, prints compression ratio table
 ```

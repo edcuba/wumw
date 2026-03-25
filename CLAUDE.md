@@ -8,12 +8,17 @@ See `wumw.md` for full spec.
 
 ## Current phase
 
-**Phase 2 complete.** Compression is implemented and tested. Now in experiment phase: benchmarking token savings on real codebases.
+**Experiments complete (E001–E021).** Compression implemented, validated, and tuned. Ready for use.
 
 ## What's been built
 
 - `wumw <cmd> [args...]` — passthrough wrapper; model opts in by prefixing commands
-- Compressors: `rg`/`grep` (cap 5/file, dedup), `cat` (strip comments/blanks, truncate 500L), `git diff` (strip metadata), `git log` (cap 20), generic fallback (collapse repeats, truncate 200L)
+- Compressors:
+  - `cat` — Python files: class/def outline with line numbers + `sed` navigation hint; other files: first 100 lines + `tail` pagination hint
+  - `rg`/`grep` — cap 5 matches/file, deduplicate, limit context lines
+  - `git diff` — strip index metadata lines
+  - `git log` — cap 20 entries
+  - generic fallback — collapse repeated lines, truncate at 200 lines
 - `--full` flag — bypasses compression, logged
 - Compression header: `# wumw: N → M lines` prepended when output is reduced
 - `wumw-analyze` — reads JSONL logs, reports bytes by command, re-read frequency, `--full` rate
@@ -65,7 +70,7 @@ Picks tasks from `tasklist.md`. All Phase 1+2 tasks complete.
 ```bash
 LOOP_PROMPT=experiment_loop.md ./run_loop.sh 10
 ```
-Picks experiments from `experiments.md`. E001–E005 pending.
+Picks experiments from `experiments.md`. E001–E021 complete.
 
 Monitor: `tail -f logs/loop_*.log`
 
