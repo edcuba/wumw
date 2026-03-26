@@ -433,6 +433,62 @@ def run_variant(
     )
 
 
+def write_trial_results_md(path: Path, repo: Path, base: str, trials: list[dict]) -> None:
+    """Write a human-readable trial_results.md summary."""
+    aggregate = aggregate_trial_summaries([trial["summary"] for trial in trials])
+    lines = [
+        "# PR Review A/B Trial Results",
+        "",
+        f"**Repo:** `{repo}`  ",
+        f"**Base:** `{base}`  ",
+        f"**Trials:** {len(trials)}  ",
+        f"**Generated:** {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}",
+        "",
+        "## Per-trial results",
+        "",
+        "| Trial | Order | Input Tokens (baseline) | Input Tokens (treatment) | Delta | Output Tokens (baseline) | Output Tokens (treatment) | Delta | Commands (baseline) | Commands (treatment) | Delta |",
+        "| ----- | ----- | ----------------------- | ------------------------ | ----- | ------------------------ | ------------------------- | ----- | ------------------- | -------------------- | ----- |",
+    ]
+    for trial in trials:
+        idx = trial["index"]
+        order = trial.get("order", "baseline-first")
+        m = trial["summary"]["metrics"]
+        b_in = m["input_tokens"]["baseline"]
+        t_in = m["input_tokens"]["treatment"]
+        b_out = m["output_tokens"]["baseline"]
+        t_out = m["output_tokens"]["treatment"]
+        b_cmd = m["command_count"]["baseline"]
+        t_cmd = m["command_count"]["treatment"]
+        lines.append(
+            f"| {idx} | {order} "
+            f"| {b_in} | {t_in} | {format_pct(m['input_tokens']['delta_pct'])} "
+            f"| {b_out} | {t_out} | {format_pct(m['output_tokens']['delta_pct'])} "
+            f"| {b_cmd} | {t_cmd} | {format_pct(m['command_count']['delta_pct'])} |"
+        )
+    lines += [
+        "",
+        "## Aggregate (treatment vs baseline delta)",
+        "",
+        "| Metric | Mean | Median | Std Dev |",
+        "| ------ | ---- | ------ | ------- |",
+    ]
+    for key, _ in METRICS:
+        stats = aggregate[key]
+        stdev_display = (
+            "n/a"
+            if stats["stdev_pct_points"] is None
+            else f"{stats['stdev_pct_points']:.1f}pp"
+        )
+        lines.append(
+            f"| {stats['label']} "
+            f"| {format_pct(stats['mean_pct'])} "
+            f"| {format_pct(stats['median_pct'])} "
+            f"| {stdev_display} |"
+        )
+    lines.append("")
+    path.write_text("\n".join(lines))
+
+
 def write_report(path: Path, repo: Path, base: str, trials: list[dict]) -> None:
     payload = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -442,6 +498,7 @@ def write_report(path: Path, repo: Path, base: str, trials: list[dict]) -> None:
         "trials": [
             {
                 "index": trial["index"],
+                "order": trial.get("order", "baseline-first"),
                 "summary": trial["summary"],
                 "results": [serialize_result(result) for result in trial["results"]],
             }
@@ -537,6 +594,22 @@ def main() -> int:
         default=Path("/tmp")
         / f"pr_review_ab_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}",
     )
+    parser.add_argument(
+        "--trial-results",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="Write a markdown trial results summary to this path (e.g. scripts/trial_results.md).",
+    )
+    parser.add_argument(
+        "--interleave",
+        action="store_true",
+        default=False,
+        help=(
+            "Alternate variant ordering across trials: odd trials run baseline first, "
+            "even trials run treatment first. Reduces order bias when averaging across trials."
+        ),
+    )
     args = parser.parse_args()
 
     if args.trials < 1:
@@ -560,33 +633,43 @@ def main() -> int:
         else:
             baseline_kwargs = dict(instruction_prefix=BASELINE_PREFIX)
             treatment_kwargs = dict(instruction_prefix=TREATMENT_PREFIX)
-        results = [
-            run_variant(
-                name="baseline_no_wumw",
+
+        # When interleaving, even-numbered trials run treatment first to reduce order bias.
+        treatment_first = args.interleave and (index % 2 == 0)
+        order_label = "treatment-first" if treatment_first else "baseline-first"
+
+        def _make_variant(name, kwargs):
+            return run_variant(
+                name=name,
                 repo=args.repo,
                 base=args.base,
                 output_dir=trial_dir,
                 runner=args.runner,
-                **baseline_kwargs,
-            ),
-            run_variant(
-                name="treatment_with_wumw",
-                repo=args.repo,
-                base=args.base,
-                output_dir=trial_dir,
-                runner=args.runner,
-                **treatment_kwargs,
-            ),
-        ]
+                **kwargs,
+            )
+
+        if treatment_first:
+            v1 = _make_variant("treatment_with_wumw", treatment_kwargs)
+            v2 = _make_variant("baseline_no_wumw", baseline_kwargs)
+            results = [v2, v1]
+        else:
+            v1 = _make_variant("baseline_no_wumw", baseline_kwargs)
+            v2 = _make_variant("treatment_with_wumw", treatment_kwargs)
+            results = [v1, v2]
+
         trials.append(
             {
                 "index": index,
+                "order": order_label,
                 "summary": summarize_trial_results(results),
                 "results": results,
             }
         )
 
     write_report(args.output_dir / "summary.json", args.repo, args.base, trials)
+    if args.trial_results:
+        write_trial_results_md(args.trial_results, args.repo, args.base, trials)
+        print(f"Trial results written to {args.trial_results}")
     print_summary(trials)
     return 0 if all(result.returncode == 0 for trial in trials for result in trial["results"]) else 1
 
