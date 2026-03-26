@@ -56,6 +56,43 @@ def log_invocation(session_info, command, args, stdout, stderr, exit_code, compr
         f.write(json.dumps(entry) + "\n")
 
 
+_HELP = """\
+usage: wumw [--full] <command> [args...]
+
+Wrap a shell command and compress its stdout before it enters LLM context.
+
+Options:
+  --full    Bypass compression; output is passed through unchanged.
+  --help    Show this message and exit.
+
+Environment variables:
+  WUMW_HEADER_MIN_SAVED          Minimum lines saved before the
+                                 '# wumw: N → M lines' header is emitted.
+                                 Default: 5. Set to 0 to always show the header.
+  WUMW_RG_CAP                    Max grep/rg matches per file. Default: 5.
+  WUMW_RG_CONTEXT_LINES          Context lines kept around each match. Default: 2.
+  WUMW_CAT_LINES                 Lines shown for non-Python files. Default: 100.
+  WUMW_CAT_OUTLINE_THRESHOLD     Python file line count above which the
+                                 outline compressor is used. Default: 100.
+  WUMW_GIT_LOG_ENTRIES           Max git log entries shown. Default: 20.
+  WUMW_GIT_DIFF_MIN_HUNK_LINES   Unchanged-hunk span compressed when larger
+                                 than this value. Default: 20.
+  WUMW_GIT_DIFF_CONTEXT_LINES    Context lines kept in compressed hunks. Default: 3.
+  WUMW_GIT_DIFF_MULTIFILE_THRESHOLD  File count above which per-file header
+                                 blocks are summarised. Default: 3.
+  WUMW_LISTING_MAX_ENTRIES       Max entries before directory listings are
+                                 grouped by extension. Default: 40.
+  WUMW_GENERIC_LINES             Truncation limit for generic output. Default: 200.
+  WUMW_GENERIC_REPEAT_THRESHOLD  Consecutive identical lines collapsed when
+                                 the run exceeds this count. Default: 3.
+  WUMW_SESSION                   Override the session id written to logs.
+  WUMW_SESSION_IDLE_TIMEOUT_SECONDS  Idle gap that triggers a new session id.
+                                 Default: 1800 (30 min).
+  WUMW_HOME                      Override the state directory root (useful in
+                                 sandboxes where the repo root is read-only).
+"""
+
+
 def main():
     if len(sys.argv) < 2:
         print("usage: wumw [--full] <command> [args...]", file=sys.stderr)
@@ -63,6 +100,9 @@ def main():
 
     full = False
     argv = sys.argv[1:]
+    if argv[0] in ("--help", "-h"):
+        print(_HELP, end="")
+        sys.exit(0)
     if argv[0] == "--full":
         full = True
         argv = argv[1:]

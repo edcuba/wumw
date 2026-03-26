@@ -69,6 +69,26 @@ WUMW_CAT_LINES=60 wumw cat src/main.py
 WUMW_GIT_LOG_ENTRIES=50 wumw git log --oneline
 ```
 
+### Environment variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `WUMW_HEADER_MIN_SAVED` | `5` | Minimum lines saved before the `# wumw: N → M lines` header is emitted. Set to `0` to always show it. |
+| `WUMW_RG_CAP` | `5` | Max grep/rg matches shown per file. |
+| `WUMW_RG_CONTEXT_LINES` | `2` | Context lines kept around each match. |
+| `WUMW_CAT_LINES` | `100` | Lines shown for non-Python files before the `tail` pagination hint. |
+| `WUMW_CAT_OUTLINE_THRESHOLD` | `100` | Python file line count above which the outline compressor is used instead of raw content. |
+| `WUMW_GIT_LOG_ENTRIES` | `20` | Max git log entries shown. |
+| `WUMW_GIT_DIFF_MIN_HUNK_LINES` | `20` | Unchanged hunk spans longer than this are compressed. |
+| `WUMW_GIT_DIFF_CONTEXT_LINES` | `3` | Context lines kept around changes in compressed hunks. |
+| `WUMW_GIT_DIFF_MULTIFILE_THRESHOLD` | `3` | File count above which per-file diff header blocks are summarised. |
+| `WUMW_LISTING_MAX_ENTRIES` | `40` | Directory listing entries above which output is grouped by extension. |
+| `WUMW_GENERIC_LINES` | `200` | Truncation limit for the generic fallback compressor. |
+| `WUMW_GENERIC_REPEAT_THRESHOLD` | `3` | Consecutive identical lines collapsed when the run exceeds this count. |
+| `WUMW_SESSION` | — | Override the session id written to logs. |
+| `WUMW_SESSION_IDLE_TIMEOUT_SECONDS` | `1800` | Idle gap (seconds) that triggers a new auto session id. |
+| `WUMW_HOME` | — | Override the state directory root (useful in sandboxes where the repo root is read-only). |
+
 ## Use with Claude Code
 
 Add to your project's `.claude/settings.json` to let Claude use wumw automatically:
