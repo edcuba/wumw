@@ -28,6 +28,29 @@ Do not make any code changes.
 Focus on bugs, risks, behavioral regressions, and missing tests.
 If you find no issues, say so explicitly and mention residual risks or testing gaps."""
 
+FORCED_READ_TARGET = "django/db/models/fields/__init__.py"
+
+FORCED_READ_BASELINE_PROMPT = (
+    "Ignore any repository guidance about wumw for this run. "
+    "Do not invoke `wumw` or `wumw --full`. "
+    "Use standard shell commands only.\n\n"
+    f"Task: Summarize the purpose and key design decisions of `{FORCED_READ_TARGET}`. "
+    f"Read the file using `cat {FORCED_READ_TARGET}`, then write a concise summary covering: "
+    "what the module does, its main abstractions, and the most important design choices visible in the code. "
+    "Do not make any code changes."
+)
+
+FORCED_READ_TREATMENT_PROMPT = (
+    "Prefix all file-reading commands with `wumw`. "
+    "`wumw` compresses large output to fit in context. "
+    "If the compressed output omits lines you need, use `sed -n 'START,ENDp' file` to read that range directly — "
+    "the omission notes include line numbers to guide you.\n\n"
+    f"Task: Summarize the purpose and key design decisions of `{FORCED_READ_TARGET}`. "
+    f"Read the file using `wumw cat {FORCED_READ_TARGET}`, then write a concise summary covering: "
+    "what the module does, its main abstractions, and the most important design choices visible in the code. "
+    "Do not make any code changes."
+)
+
 BASELINE_PREFIX = (
     "Ignore any repository guidance about wumw for this run. "
     "Do not invoke `wumw` or `wumw --full`. "
@@ -309,9 +332,13 @@ def run_variant(
     output_dir: Path,
     instruction_prefix: str,
     runner: str = "claude",
+    prompt_override: str | None = None,
 ) -> VariantResult:
-    protocol = _RESEARCH_PROTOCOL.format(base=base)
-    prompt = f"{instruction_prefix}\n\n{DEFAULT_PROMPT.format(base=base, protocol=protocol)}"
+    if prompt_override is not None:
+        prompt = prompt_override
+    else:
+        protocol = _RESEARCH_PROTOCOL.format(base=base)
+        prompt = f"{instruction_prefix}\n\n{DEFAULT_PROMPT.format(base=base, protocol=protocol)}"
     events_path = output_dir / f"{name}.jsonl"
     last_message_path = output_dir / f"{name}.last.md"
 
@@ -495,6 +522,16 @@ def main() -> int:
     parser.add_argument("--trials", type=int, default=1)
     parser.add_argument("--runner", choices=["claude", "codex"], default="claude")
     parser.add_argument(
+        "--task",
+        choices=["pr-review", "forced-read"],
+        default="pr-review",
+        help=(
+            "Task type: 'pr-review' (default) reviews commits on the branch; "
+            "'forced-read' asks both agents to summarize a large file "
+            f"({FORCED_READ_TARGET}) — compression is the only variable."
+        ),
+    )
+    parser.add_argument(
         "--output-dir",
         type=Path,
         default=Path("/tmp")
@@ -511,22 +548,34 @@ def main() -> int:
     for index in range(1, args.trials + 1):
         trial_dir = args.output_dir / f"trial_{index:02d}" if args.trials > 1 else args.output_dir
         trial_dir.mkdir(parents=True, exist_ok=True)
+        if args.task == "forced-read":
+            baseline_kwargs = dict(
+                prompt_override=FORCED_READ_BASELINE_PROMPT,
+                instruction_prefix="",
+            )
+            treatment_kwargs = dict(
+                prompt_override=FORCED_READ_TREATMENT_PROMPT,
+                instruction_prefix="",
+            )
+        else:
+            baseline_kwargs = dict(instruction_prefix=BASELINE_PREFIX)
+            treatment_kwargs = dict(instruction_prefix=TREATMENT_PREFIX)
         results = [
             run_variant(
                 name="baseline_no_wumw",
                 repo=args.repo,
                 base=args.base,
                 output_dir=trial_dir,
-                instruction_prefix=BASELINE_PREFIX,
                 runner=args.runner,
+                **baseline_kwargs,
             ),
             run_variant(
                 name="treatment_with_wumw",
                 repo=args.repo,
                 base=args.base,
                 output_dir=trial_dir,
-                instruction_prefix=TREATMENT_PREFIX,
                 runner=args.runner,
+                **treatment_kwargs,
             ),
         ]
         trials.append(
