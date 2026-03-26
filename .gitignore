@@ -15,5 +15,11 @@ benchmarks/
 # agent loop logs
 logs/
 
+# ephemeral WIP docs (local only)
+tasklist.md
+experiments.md
+experiment_loop.md
+pr_review_benchmark.md
+
 # misc
 .DS_Store
