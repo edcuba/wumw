@@ -616,7 +616,7 @@ class TestGitDiffCompressor:
 
         result = _compress_git_diff(input_lines)
 
-        assert b"# ... " not in join(result)
+        assert b"... (" not in join(result)
         assert join(result).count(b" context ") == 2
 
     def test_large_hunk_omits_middle_context(self):
@@ -638,7 +638,7 @@ class TestGitDiffCompressor:
         joined = join(result)
 
         assert b"@@ -1,28 +1,28 @@" in joined
-        assert b"# ... " in joined
+        assert b"... (" in joined
         assert b"context before 0\n" not in joined
         assert b"context before 11\n" in joined
         assert b"context after 0\n" in joined
@@ -663,7 +663,7 @@ class TestGitDiffCompressor:
         result = _compress_git_diff(input_lines)
         joined = join(result)
 
-        assert joined.count(b"# ... ") == 1
+        assert joined.count(b"... (") == 1
         assert f" shared {GIT_DIFF_CONTEXT_LINES - 1}\n".encode() in joined
         assert f" shared {GIT_DIFF_CONTEXT_LINES}\n".encode() not in joined
         tail_index = len(shared) - GIT_DIFF_CONTEXT_LINES
@@ -684,7 +684,7 @@ class TestGitDiffCompressor:
 
         result = _compress_git_diff(input_lines)
 
-        assert b"# ... " not in join(result)
+        assert b"... (" not in join(result)
 
     def test_keeps_hunk_content_that_looks_like_file_headers(self):
         input_lines = [
@@ -735,13 +735,12 @@ class TestGitDiffCompressor:
         assert b"file headers compressed" in joined
 
     def test_multifile_file_lines_collapsed_to_compact(self):
-        """With >3 files, diff --git/---/+++ lines collapse to ## diff: path."""
+        """With >3 files, ---/+++ lines are dropped; diff --git line is kept."""
         result = _compress_git_diff(self._multifile_diff(4))
         joined = join(result)
-        assert b"## diff: file0.py" in joined
-        assert b"## diff: file3.py" in joined
-        # Original verbose headers should be gone
-        assert b"diff --git" not in joined
+        assert b"diff --git a/file0.py b/file0.py" in joined
+        assert b"diff --git a/file3.py b/file3.py" in joined
+        # ---/+++ lines are redundant when file is identified by diff --git header
         assert b"--- a/file0.py" not in joined
         assert b"+++ b/file0.py" not in joined
 

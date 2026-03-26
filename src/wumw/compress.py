@@ -576,21 +576,14 @@ def _compress_git_diff(lines: list[bytes]) -> list[bytes]:
             if line.startswith(b'diff --git'):
                 flush_hunk()
                 in_hunk = False
-                if compress_headers:
-                    m = _DIFF_GIT_FILE_RE.match(line.rstrip())
-                    path = m.group(2).decode("utf-8", errors="ignore") if m else "?"
-                    result.append(f"## diff: {path}\n".encode())
-                else:
-                    result.append(line)
+                result.append(line)
             else:
                 hunk_body.append(line)
             continue
 
         if compress_headers:
             if line.startswith(b'diff --git '):
-                m = _DIFF_GIT_FILE_RE.match(line.rstrip())
-                path = m.group(2).decode("utf-8", errors="ignore") if m else "?"
-                result.append(f"## diff: {path}\n".encode())
+                result.append(line)
                 continue
             if line.startswith(b'--- ') or line.startswith(b'+++ '):
                 # Redundant when using compact header; skip
@@ -650,11 +643,11 @@ def _compress_git_hunk(lines: list[bytes], hunk_new_start: int | None = None) ->
         if all(line.startswith(b' ') for line in gap):
             if gap_new_start is not None:
                 gap_new_end = new_line - 1
-                range_hint = f" (lines {gap_new_start}–{gap_new_end})"
+                range_hint = f", lines {gap_new_start}-{gap_new_end}"
             else:
                 range_hint = ""
             compressed.append(
-                f"# ... {len(gap)} unchanged lines omitted{range_hint} ...\n".encode()
+                f"... ({len(gap)} lines omitted{range_hint})\n".encode()
             )
         else:
             compressed.extend(gap)
