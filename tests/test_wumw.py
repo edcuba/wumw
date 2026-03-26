@@ -703,6 +703,68 @@ class TestGitDiffCompressor:
         assert b"--- removed text that starts like a header\n" in joined
         assert b"+++ added text that starts like a header\n" in joined
 
+    def _multifile_diff(self, n):
+        """Build a synthetic diff with n files, each with one small hunk."""
+        lines = []
+        for i in range(n):
+            lines += [
+                f"diff --git a/file{i}.py b/file{i}.py\n".encode(),
+                f"index abc{i:03d}..def{i:03d} 100644\n".encode(),
+                f"--- a/file{i}.py\n".encode(),
+                f"+++ b/file{i}.py\n".encode(),
+                f"@@ -1,2 +1,2 @@\n".encode(),
+                b" context\n",
+                f"-removed {i}\n".encode(),
+                f"+added {i}\n".encode(),
+            ]
+        return lines
+
+    def test_single_file_keeps_full_headers(self):
+        """With only 1 file, full headers are kept (below threshold)."""
+        result = _compress_git_diff(self._multifile_diff(1))
+        joined = join(result)
+        assert b"diff --git" in joined
+        assert b"--- a/file0.py" in joined
+        assert b"+++ b/file0.py" in joined
+
+    def test_multifile_summary_header_added(self):
+        """With >3 files, a summary line is prepended."""
+        result = _compress_git_diff(self._multifile_diff(4))
+        joined = join(result)
+        assert b"# wumw: 4 files changed" in joined
+        assert b"file headers compressed" in joined
+
+    def test_multifile_file_lines_collapsed_to_compact(self):
+        """With >3 files, diff --git/---/+++ lines collapse to ## diff: path."""
+        result = _compress_git_diff(self._multifile_diff(4))
+        joined = join(result)
+        assert b"## diff: file0.py" in joined
+        assert b"## diff: file3.py" in joined
+        # Original verbose headers should be gone
+        assert b"diff --git" not in joined
+        assert b"--- a/file0.py" not in joined
+        assert b"+++ b/file0.py" not in joined
+
+    def test_multifile_hunk_content_preserved(self):
+        """Hunk content is kept even when file headers are compressed."""
+        result = _compress_git_diff(self._multifile_diff(4))
+        joined = join(result)
+        assert b"-removed 0\n" in joined
+        assert b"+added 3\n" in joined
+        assert b"@@ -1,2 +1,2 @@" in joined
+
+    def test_multifile_index_lines_stripped(self):
+        """Index lines with '..' are stripped regardless of file count."""
+        result = _compress_git_diff(self._multifile_diff(4))
+        assert not any(l.startswith(b"index ") for l in result)
+
+    def test_exactly_threshold_no_compression(self):
+        """With exactly 3 files (= threshold, not >), headers are not compressed."""
+        result = _compress_git_diff(self._multifile_diff(3))
+        joined = join(result)
+        assert b"diff --git" in joined
+        assert b"--- a/file0.py" in joined
+
 
 # ---------------------------------------------------------------------------
 # 5. git log compressor — caps at 20 entries

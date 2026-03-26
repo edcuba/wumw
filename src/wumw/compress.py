@@ -28,6 +28,7 @@ MAX_LOG_ENTRIES = 20
 
 GIT_DIFF_REVIEW_MIN_HUNK_LINES = 20
 GIT_DIFF_CONTEXT_LINES = 3
+GIT_DIFF_MULTIFILE_THRESHOLD = 3  # compress file headers when more than this many files
 
 LISTING_MAX_ENTRIES = 40
 LISTING_GROUP_SAMPLE_CAP = 4
@@ -95,6 +96,14 @@ def _git_diff_review_min_hunk_lines() -> int:
 
 def _git_diff_context_lines() -> int:
     return _env_int("WUMW_GIT_DIFF_CONTEXT_LINES", GIT_DIFF_CONTEXT_LINES)
+
+
+def _git_diff_multifile_threshold() -> int:
+    return _env_int(
+        "WUMW_GIT_DIFF_MULTIFILE_THRESHOLD",
+        GIT_DIFF_MULTIFILE_THRESHOLD,
+        minimum=1,
+    )
 
 
 def _listing_max_entries() -> int:
@@ -513,6 +522,9 @@ def _sample_listing_groups(groups: list[tuple[str, list[bytes]]]) -> list[tuple[
     return [(label, samples[label]) for label, _ in groups if samples[label]]
 
 
+_DIFF_GIT_FILE_RE = re.compile(rb'^diff --git a/(.+) b/(.+)$')
+
+
 def _compress_git_diff(lines: list[bytes]) -> list[bytes]:
     """
     Strip diff metadata noise and shrink oversized hunks for review work.
@@ -520,11 +532,26 @@ def _compress_git_diff(lines: list[bytes]) -> list[bytes]:
     File headers and hunk headers are preserved. Large unchanged stretches
     inside hunks are replaced with an omission marker while keeping a few
     lines of local context around each change cluster.
+
+    When the diff spans more than GIT_DIFF_MULTIFILE_THRESHOLD files, the
+    per-file metadata block (diff --git, index, --- a/, +++ b/) is collapsed
+    into a single compact header line to reduce noise on broad diffs.
     """
+    multifile_threshold = _git_diff_multifile_threshold()
+
+    # Count files to decide whether to compress file headers
+    file_count = sum(1 for l in lines if l.startswith(b'diff --git '))
+    compress_headers = file_count > multifile_threshold
+
     result: list[bytes] = []
     hunk_body: list[bytes] = []
     in_hunk = False
     hunk_new_start: int | None = None
+
+    if compress_headers:
+        result.append(
+            f"# wumw: {file_count} files changed — file headers compressed\n".encode()
+        )
 
     def flush_hunk() -> None:
         if not hunk_body:
@@ -548,11 +575,26 @@ def _compress_git_diff(lines: list[bytes]) -> list[bytes]:
         if in_hunk:
             if line.startswith(b'diff --git'):
                 flush_hunk()
-                result.append(line)
                 in_hunk = False
+                if compress_headers:
+                    m = _DIFF_GIT_FILE_RE.match(line.rstrip())
+                    path = m.group(2).decode("utf-8", errors="ignore") if m else "?"
+                    result.append(f"## diff: {path}\n".encode())
+                else:
+                    result.append(line)
             else:
                 hunk_body.append(line)
             continue
+
+        if compress_headers:
+            if line.startswith(b'diff --git '):
+                m = _DIFF_GIT_FILE_RE.match(line.rstrip())
+                path = m.group(2).decode("utf-8", errors="ignore") if m else "?"
+                result.append(f"## diff: {path}\n".encode())
+                continue
+            if line.startswith(b'--- ') or line.startswith(b'+++ '):
+                # Redundant when using compact header; skip
+                continue
 
         result.append(line)
 
