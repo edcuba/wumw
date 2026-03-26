@@ -1,29 +1,46 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import os
 import subprocess
 import sys
+import uuid
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from statistics import mean, median, stdev
 
+WUMW_VENV_BIN = Path(__file__).parent.parent / ".venv" / "bin"
 
-DEFAULT_PROMPT = """Review the current branch against {base}.
+
+_RESEARCH_PROTOCOL = """
+Follow this research protocol — do not skip steps:
+1. Read the full diff between {base} and HEAD.
+2. For each changed Python file, read the file to understand the broader context around the changed lines.
+3. Search for callers and tests of any renamed, deprecated, or newly added symbols.
+4. Write your findings with file:line references.
+"""
+
+DEFAULT_PROMPT = """Review the commit(s) on the current branch against {base}.
 Do not make any code changes.
+{protocol}
 Focus on bugs, risks, behavioral regressions, and missing tests.
-Present findings first with file/line references.
-If you find no issues, say that explicitly and mention residual risks or testing gaps."""
+If you find no issues, say so explicitly and mention residual risks or testing gaps."""
 
 BASELINE_PREFIX = (
     "Ignore any repository guidance about wumw for this run. "
-    "Do not invoke `wumw` or `wumw --full`. Use standard shell commands only."
+    "Do not invoke `wumw` or `wumw --full`. "
+    "Use standard shell commands: git diff, cat, grep."
 )
 
 TREATMENT_PREFIX = (
-    "Use `wumw` selectively for large file reads, searches, and git output. "
-    "If compression hides needed detail, use `wumw --full` or targeted `sed -n` reads."
+    "Prefix all file-reading and search commands with `wumw`: "
+    "use `wumw git diff base..HEAD`, `wumw cat file`, `wumw grep pattern dir`. "
+    "`wumw` compresses large output to fit in context. "
+    "If the compressed output omits lines you need, use `sed -n 'START,ENDp' file` to read that range directly — "
+    "the omission notes include line numbers to guide you. "
+    "Do not skip reading a file because it is large — use `wumw cat` to read it."
 )
 
 METRICS = (
@@ -218,6 +235,57 @@ def parse_events(path: Path) -> dict:
     }
 
 
+def parse_claude_events(path: Path) -> dict:
+    session_id = None
+    usage = {}
+    command_counts = Counter()
+    command_count = 0
+    wumw_command_count = 0
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        t = event.get("type")
+        if t == "system":
+            session_id = event.get("session_id")
+        elif t == "assistant":
+            for block in event.get("message", {}).get("content", []):
+                if block.get("type") != "tool_use":
+                    continue
+                tool_name = block.get("name", "")
+                if tool_name != "Bash":
+                    continue
+                command_count += 1
+                command = block.get("input", {}).get("command", "")
+                prog = program_name(command)
+                command_counts[prog] += 1
+                if "wumw" in command.split():
+                    wumw_command_count += 1
+                elif command.startswith("wumw ") or " wumw " in f" {command} ":
+                    wumw_command_count += 1
+        elif t == "result":
+            u = event.get("usage", {})
+            usage = {
+                "input_tokens": u.get("input_tokens", 0)
+                + u.get("cache_read_input_tokens", 0)
+                + u.get("cache_creation_input_tokens", 0),
+                "output_tokens": u.get("output_tokens", 0),
+                "cache_read_input_tokens": u.get("cache_read_input_tokens", 0),
+                "cache_creation_input_tokens": u.get("cache_creation_input_tokens", 0),
+            }
+    return {
+        "session_id": session_id,
+        "usage": usage,
+        "command_count": command_count,
+        "command_counts_by_prog": dict(command_counts),
+        "wumw_command_count": wumw_command_count,
+    }
+
+
 def program_name(command: str) -> str:
     if not command:
         return "?"
@@ -240,31 +308,75 @@ def run_variant(
     base: str,
     output_dir: Path,
     instruction_prefix: str,
+    runner: str = "claude",
 ) -> VariantResult:
-    prompt = f"{instruction_prefix}\n\n{DEFAULT_PROMPT.format(base=base)}"
+    protocol = _RESEARCH_PROTOCOL.format(base=base)
+    prompt = f"{instruction_prefix}\n\n{DEFAULT_PROMPT.format(base=base, protocol=protocol)}"
     events_path = output_dir / f"{name}.jsonl"
     last_message_path = output_dir / f"{name}.last.md"
-    command = [
-        "codex",
-        "exec",
-        "--json",
-        "--full-auto",
-        "--cd",
-        str(repo),
-        "-o",
-        str(last_message_path),
-        prompt,
-    ]
-    completed = subprocess.run(
-        command,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    events_path.write_text(completed.stdout)
-    final_message = last_message_path.read_text() if last_message_path.exists() else ""
-    event_summary = parse_events(events_path)
-    thread_id = event_summary["thread_id"]
+
+    if runner == "claude":
+        session_id = str(uuid.uuid4())
+        env = os.environ.copy()
+        if WUMW_VENV_BIN.exists():
+            env["PATH"] = f"{WUMW_VENV_BIN}:{env.get('PATH', '')}"
+        env["WUMW_SESSION"] = session_id
+        command = [
+            "claude",
+            "-p",
+            "--output-format", "stream-json",
+            "--verbose",
+            "--dangerously-skip-permissions",
+            "--session-id", session_id,
+            prompt,
+        ]
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=repo,
+            env=env,
+        )
+        events_path.write_text(completed.stdout)
+        event_summary = parse_claude_events(events_path)
+        thread_id = event_summary["session_id"]
+        # Extract final message from the result event in stream-json
+        final_message = ""
+        for line in completed.stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                e = json.loads(line)
+                if e.get("type") == "result":
+                    final_message = e.get("result", "")
+            except json.JSONDecodeError:
+                pass
+        last_message_path.write_text(final_message)
+    else:
+        command = [
+            "codex",
+            "exec",
+            "--json",
+            "--full-auto",
+            "--cd",
+            str(repo),
+            "-o",
+            str(last_message_path),
+            prompt,
+        ]
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        events_path.write_text(completed.stdout)
+        event_summary = parse_events(events_path)
+        thread_id = event_summary["thread_id"]
+        final_message = last_message_path.read_text() if last_message_path.exists() else ""
+
     session_path = None
     savings = None
     if thread_id:
@@ -279,7 +391,9 @@ def run_variant(
         returncode=completed.returncode,
         thread_id=thread_id,
         input_tokens=event_summary["usage"].get("input_tokens"),
-        cached_input_tokens=event_summary["usage"].get("cached_input_tokens"),
+        cached_input_tokens=event_summary["usage"].get("cached_input_tokens")
+        if runner == "codex"
+        else event_summary["usage"].get("cache_read_input_tokens"),
         output_tokens=event_summary["usage"].get("output_tokens"),
         command_count=event_summary["command_count"],
         command_counts_by_prog=event_summary["command_counts_by_prog"],
@@ -379,6 +493,7 @@ def main() -> int:
     parser.add_argument("--repo", required=True, type=Path)
     parser.add_argument("--base", default="main")
     parser.add_argument("--trials", type=int, default=1)
+    parser.add_argument("--runner", choices=["claude", "codex"], default="claude")
     parser.add_argument(
         "--output-dir",
         type=Path,
@@ -403,6 +518,7 @@ def main() -> int:
                 base=args.base,
                 output_dir=trial_dir,
                 instruction_prefix=BASELINE_PREFIX,
+                runner=args.runner,
             ),
             run_variant(
                 name="treatment_with_wumw",
@@ -410,6 +526,7 @@ def main() -> int:
                 base=args.base,
                 output_dir=trial_dir,
                 instruction_prefix=TREATMENT_PREFIX,
+                runner=args.runner,
             ),
         ]
         trials.append(

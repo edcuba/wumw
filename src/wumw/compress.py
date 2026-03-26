@@ -210,23 +210,41 @@ def _compress_grep(lines: list[bytes], **kwargs) -> list[bytes]:
     file_total_matches: dict[bytes, int] = {}
     file_duplicate_omissions: dict[bytes, int] = {}
     file_cap_omissions: dict[bytes, int] = {}
+    file_cap_omitted_lines: dict[bytes, list[int]] = {}
     file_seen_content: dict[bytes, set] = {}
 
     result: list[bytes] = []
-    # Context lines buffered while in a skipped-match block; flushed as
-    # pre-context if the next match is kept, discarded if it is also skipped.
-    pre_ctx_buf: list[bytes] = []
+    # Context lines and the preceding `--` separator are buffered between
+    # groups. The buffer is flushed (separator + pre-context + match) only
+    # when a kept match is found. If the group's match is skipped the buffer
+    # is discarded, preventing dangling separators and orphaned context lines.
+    pre_ctx_buf: list[bytes] = []   # context lines for the current group
+    pending_sep: bytes | None = None  # buffered `--` separator line
     in_skipped = False  # True after a match line was dropped
+
+    def _flush_pre_ctx(kept_match: bytes) -> None:
+        """Emit pending separator, buffered pre-context, then the kept match."""
+        nonlocal pending_sep
+        if pending_sep is not None:
+            result.append(pending_sep)
+            pending_sep = None
+        result.extend(pre_ctx_buf)
+        pre_ctx_buf.clear()
+        result.append(kept_match)
 
     for line in lines:
         raw = line.rstrip(b'\n\r')
 
         if raw == b'--':
+            # Flush any leftover pre-ctx from the previous group that wasn't
+            # consumed (i.e. the previous group ended with a kept match whose
+            # post-context we want to keep).
             if not in_skipped:
                 result.extend(pre_ctx_buf)
-            pre_ctx_buf = []
+            pre_ctx_buf.clear()
             in_skipped = False
-            result.append(line)
+            # Buffer the separator — emit only if the next group has a kept match.
+            pending_sep = line
             continue
 
         m = _GREP_MATCH_RE.match(raw)
@@ -240,38 +258,35 @@ def _compress_grep(lines: list[bytes], **kwargs) -> list[bytes]:
             if content_key in seen:
                 file_duplicate_omissions[filepath] = file_duplicate_omissions.get(filepath, 0) + 1
                 in_skipped = True
-                pre_ctx_buf = []
+                pre_ctx_buf.clear()
             elif count >= match_cap:
                 file_cap_omissions[filepath] = file_cap_omissions.get(filepath, 0) + 1
+                file_cap_omitted_lines.setdefault(filepath, []).append(int(m.group(2)))
                 in_skipped = True
-                pre_ctx_buf = []
+                pre_ctx_buf.clear()
             else:
                 file_match_count[filepath] = count + 1
                 seen.add(content_key)
-                result.extend(pre_ctx_buf)
-                pre_ctx_buf = []
-                result.append(line)
+                _flush_pre_ctx(line)
                 in_skipped = False
             continue
 
         c = _GREP_CONTEXT_RE.match(raw)
         if c:
-            if in_skipped:
-                # Post-context of a skipped match; save as potential pre-context
-                # for the next match, trimmed to MAX_CONTEXT_LINES.
-                pre_ctx_buf.append(line)
-                if context_lines == 0:
-                    pre_ctx_buf = []
-                elif len(pre_ctx_buf) > context_lines:
-                    pre_ctx_buf = pre_ctx_buf[-context_lines:]
-            else:
-                # Post-context of a kept match — emit immediately.
-                result.append(line)
+            # Buffer context lines whether we're after a kept or skipped match —
+            # they serve as pre-context for the next match in this group.
+            pre_ctx_buf.append(line)
+            if context_lines == 0:
+                pre_ctx_buf.clear()
+            elif len(pre_ctx_buf) > context_lines:
+                pre_ctx_buf = pre_ctx_buf[-context_lines:]
             continue
 
         # Unrecognised line (e.g. binary match notice, filename-only header).
-        result.extend(pre_ctx_buf)
-        pre_ctx_buf = []
+        if not in_skipped:
+            result.extend(pre_ctx_buf)
+        pre_ctx_buf.clear()
+        pending_sep = None
         result.append(line)
         in_skipped = False
 
@@ -290,7 +305,13 @@ def _compress_grep(lines: list[bytes], **kwargs) -> list[bytes]:
         if duplicate_omissions:
             reasons.append(f"{duplicate_omissions} duplicate".encode())
         if cap_omissions:
-            reasons.append(f"{cap_omissions} over cap".encode())
+            omitted_lines = file_cap_omitted_lines.get(filepath, [])
+            _MAX_LINE_HINTS = 10
+            shown = omitted_lines[:_MAX_LINE_HINTS]
+            line_hint = ", ".join(str(ln) for ln in shown)
+            if len(omitted_lines) > _MAX_LINE_HINTS:
+                line_hint += f" (+{len(omitted_lines) - _MAX_LINE_HINTS} more)"
+            reasons.append(f"{cap_omissions} over cap at lines {line_hint}".encode())
 
         summary = (
             b"# wumw: "
@@ -306,6 +327,7 @@ def _compress_grep(lines: list[bytes], **kwargs) -> list[bytes]:
 
 _GIT_LOG_SHA_RE = re.compile(rb'^commit [0-9a-f]{7,40}')
 _GIT_LOG_ONELINE_RE = re.compile(rb'^[0-9a-f]{7,40} ')
+_HUNK_HEADER_RE = re.compile(rb'@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@')
 
 
 @register("git")
@@ -502,11 +524,12 @@ def _compress_git_diff(lines: list[bytes]) -> list[bytes]:
     result: list[bytes] = []
     hunk_body: list[bytes] = []
     in_hunk = False
+    hunk_new_start: int | None = None
 
     def flush_hunk() -> None:
         if not hunk_body:
             return
-        result.extend(_compress_git_hunk(hunk_body))
+        result.extend(_compress_git_hunk(hunk_body, hunk_new_start))
         hunk_body.clear()
 
     for line in lines:
@@ -518,6 +541,8 @@ def _compress_git_diff(lines: list[bytes]) -> list[bytes]:
             flush_hunk()
             result.append(line)
             in_hunk = True
+            m = _HUNK_HEADER_RE.match(line)
+            hunk_new_start = int(m.group(1)) if m else None
             continue
 
         if in_hunk:
@@ -535,7 +560,7 @@ def _compress_git_diff(lines: list[bytes]) -> list[bytes]:
     return result
 
 
-def _compress_git_hunk(lines: list[bytes]) -> list[bytes]:
+def _compress_git_hunk(lines: list[bytes], hunk_new_start: int | None = None) -> list[bytes]:
     """Collapse large unchanged spans inside a single diff hunk."""
     min_hunk_lines = _git_diff_review_min_hunk_lines()
     context_lines = _git_diff_context_lines()
@@ -556,22 +581,38 @@ def _compress_git_hunk(lines: list[bytes]) -> list[bytes]:
     if len(keep_indexes) >= len(lines):
         return lines
 
+    # Track new-file line number so omission markers include the range.
+    # Lines starting with ' ' or '+' advance the new-file counter;
+    # lines starting with '-' do not.
+    new_line = hunk_new_start  # None if header was unparseable
+
     compressed: list[bytes] = []
     idx = 0
     while idx < len(lines):
         if idx in keep_indexes:
+            if new_line is not None:
+                if not lines[idx].startswith(b'-'):
+                    new_line += 1
             compressed.append(lines[idx])
             idx += 1
             continue
 
         gap_start = idx
+        gap_new_start = new_line
         while idx < len(lines) and idx not in keep_indexes:
+            if new_line is not None and not lines[idx].startswith(b'-'):
+                new_line += 1
             idx += 1
         gap = lines[gap_start:idx]
 
         if all(line.startswith(b' ') for line in gap):
+            if gap_new_start is not None:
+                gap_new_end = new_line - 1
+                range_hint = f" (lines {gap_new_start}–{gap_new_end})"
+            else:
+                range_hint = ""
             compressed.append(
-                f"# ... {len(gap)} unchanged lines omitted ...\n".encode()
+                f"# ... {len(gap)} unchanged lines omitted{range_hint} ...\n".encode()
             )
         else:
             compressed.extend(gap)
@@ -610,12 +651,16 @@ def _compress_cat(lines: list[bytes], filename: str = None, total_lines: int = N
     if filename and filename.endswith('.py') and total_lines and total_lines > outline_threshold:
         return _compress_cat_outline(lines, filename, total_lines)
 
+    is_python = filename and filename.endswith('.py')
     result: list[bytes] = []
     for line in lines:
         stripped = line.strip()
         if not stripped:
             continue
-        if stripped.startswith(_COMMENT_PREFIXES):
+        # Only strip comment-only lines for Python files; other formats use
+        # comment syntax that carries meaning (e.g. `#` in shell, `*` in
+        # Markdown/JSDoc, `--` in SQL).
+        if is_python and stripped.startswith(b'#'):
             continue
         result.append(line)
         if len(result) >= cat_lines:

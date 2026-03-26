@@ -231,7 +231,7 @@ class TestGrepCompressor:
             for i in range(MAX_MATCHES_PER_FILE + 2)
         ]
         result = _compress_grep(input_lines)
-        assert b"# wumw: file.py kept 5/7 matches; 2 more matches omitted (2 over cap)\n" in result
+        assert b"# wumw: file.py kept 5/7 matches; 2 more matches omitted (2 over cap at lines 5, 6)\n" in result
 
     def test_adds_omission_hint_when_duplicates_dropped(self):
         input_lines = [
@@ -263,7 +263,180 @@ class TestGrepCompressor:
 
         count = sum(1 for l in result if l.startswith(b"file.py:"))
         assert count == 2
-        assert b"# wumw: file.py kept 2/4 matches; 2 more matches omitted (2 over cap)\n" in result
+        assert b"# wumw: file.py kept 2/4 matches; 2 more matches omitted (2 over cap at lines 2, 3)\n" in result
+
+
+# ---------------------------------------------------------------------------
+# 2b. rg/grep compressor — real-world fixture tests
+# ---------------------------------------------------------------------------
+
+class TestGrepCompressorRealWorld:
+    """
+    Tests built from actual rg/grep output captured against the django codebase.
+    These catch edge cases that synthetic _make_match helpers miss.
+    """
+
+    def _lines(self, *rows):
+        return [row.encode() + b"\n" for row in rows]
+
+    def test_multifile_cap_omission_shows_line_numbers(self):
+        # Real pattern: `rg "get_placeholder_sql" --no-heading -n` across two files.
+        # compiler.py has 11 hits; fields/__init__.py has 8. Cap=5 per file.
+        # Omitted compiler.py lines: 1782, 1786, 1787, 1788, 2088, 2090
+        # Omitted fields/__init__.py lines: 201, 202, 208
+        compiler_lines = self._lines(
+            "django/db/models/sql/compiler.py:1693:    def field_as_sql(self, field, get_placeholder_sql, val):",
+            "django/db/models/sql/compiler.py:1697:        fields with get_placeholder_sql(), and compilable defined",
+            "django/db/models/sql/compiler.py:1706:        elif get_placeholder_sql is not None:",
+            "django/db/models/sql/compiler.py:1709:            sql, params = get_placeholder_sql(val, self, self.connection)",
+            "django/db/models/sql/compiler.py:1781:        get_placeholder_sqls = [",
+            # over cap below
+            "django/db/models/sql/compiler.py:1782:            getattr(field, 'get_placeholder_sql', None) for field in fields",
+            "django/db/models/sql/compiler.py:1786:                self.field_as_sql(field, get_placeholder_sql, value)",
+            "django/db/models/sql/compiler.py:1787:                for field, get_placeholder_sql, value in zip(",
+            "django/db/models/sql/compiler.py:1788:                    fields, get_placeholder_sqls, row",
+            "django/db/models/sql/compiler.py:2088:                get_placeholder_sql := getattr(field, 'get_placeholder_sql', None)",
+            "django/db/models/sql/compiler.py:2090:                sql, params = get_placeholder_sql(val, self, self.connection)",
+        )
+        fields_lines = self._lines(
+            "django/db/models/fields/__init__.py:188:        # Allow for both `get_placeholder` and `get_placeholder_sql`",
+            "django/db/models/fields/__init__.py:191:            get_placeholder := cls.__dict__.get('get_placeholder')",
+            "django/db/models/fields/__init__.py:192:        ) is not None and 'get_placeholder_sql' not in cls.__dict__:",
+            "django/db/models/fields/__init__.py:194:                'Field.get_placeholder is deprecated in favor of get_placeholder_sql.'",
+            "django/db/models/fields/__init__.py:195:                f'Define {cls.__module__}.{cls.__qualname__}.get_placeholder_sql '",
+            # over cap below
+            "django/db/models/fields/__init__.py:201:            def get_placeholder_sql(self, value, compiler, connection):",
+            "django/db/models/fields/__init__.py:202:                placeholder = get_placeholder(self, value, compiler, connection)",
+            "django/db/models/fields/__init__.py:208:            setattr(cls, 'get_placeholder_sql', get_placeholder_sql)",
+        )
+        result = _compress_grep(compiler_lines + fields_lines)
+        output = b"".join(result)
+
+        # compiler.py: 5 kept, 6 omitted.
+        # Line 2090 has identical content to line 1709 → counted as duplicate, not cap.
+        # Cap-omitted: 1782, 1786, 1787, 1788, 2088 (5). Duplicate: 2090 (1).
+        assert b"compiler.py kept 5/11 matches" in output
+        assert b"1 duplicate" in output
+        assert b"5 over cap at lines 1782, 1786, 1787, 1788, 2088" in output
+        # fields/__init__.py: 5 kept, 3 omitted at lines 201, 202, 208
+        assert b"__init__.py kept 5/8 matches" in output
+        assert b"3 over cap at lines 201, 202, 208" in output
+        # 10 match lines kept total (5 per file)
+        kept = [l for l in result if b"get_placeholder" in l and not l.startswith(b"#")]
+        assert len(kept) == 10
+
+    def test_context_around_skipped_match_is_suppressed(self):
+        # Context lines (both pre- and post-) around a skipped match must not
+        # appear in output. The separator and its following context are buffered
+        # and only flushed if the next match in the group is kept.
+        lines = self._lines(
+            # 5 matches to saturate cap (cap=5)
+            "compiler.py:1693:match 1",
+            "compiler.py:1697:match 2",
+            "compiler.py:1706:match 3",
+            "compiler.py:1709:match 4",
+            "compiler.py:1781:match 5",
+            "--",
+            "compiler.py:1785-        pre-ctx of over-cap match",
+            "compiler.py:1786:match 6 over cap",
+            "compiler.py:1787-        post-ctx of over-cap match",
+        )
+        result = _compress_grep(lines)
+        output = b"".join(result)
+        # Pre- and post-ctx of the skipped match must be suppressed
+        assert b"compiler.py:1785-" not in output
+        assert b"compiler.py:1787-" not in output
+        # Separator must also be suppressed (no kept match follows it)
+        assert b"--\n" not in output
+        # Skipped match itself must not appear
+        assert b"compiler.py:1786:" not in output
+
+    def test_post_context_of_skipped_match_flushed_as_pre_context_when_next_is_kept(self):
+        # Buffered post-ctx of a skipped match becomes pre-ctx of the next kept match.
+        # Two files: file A fills the cap and has a skipped match with post-ctx;
+        # then file B has a kept match — the buffer is discarded when file changes.
+        # Instead, use one file where a skipped match is followed by a kept match
+        # in a second file (different filepath resets per-file state).
+        lines = self._lines(
+            # Fill cap for a.py
+            "a.py:1:match 1",
+            "a.py:2:match 2",
+            "a.py:3:match 3",
+            "a.py:4:match 4",
+            "a.py:5:match 5",
+            "--",
+            "a.py:9-pre-ctx of skipped",
+            "a.py:10:match 6 over cap for a.py",  # skipped
+            "a.py:11-post-ctx buffered",           # buffered
+            "--",
+            # b.py has a kept match; buffered a.py ctx should be discarded (separator resets)
+            "b.py:1:match in b.py",
+        )
+        result = _compress_grep(lines)
+        output = b"".join(result)
+        # Buffered post-ctx (a.py:11-) must not appear: separator resets the buffer
+        assert b"a.py:11-" not in output
+        # b.py match is kept
+        assert b"b.py:1:" in output
+
+    def test_group_separator_passthrough_between_kept_matches(self):
+        # `--` between two kept matches must be preserved in output.
+        lines = self._lines(
+            "a.py:1:first match",
+            "--",
+            "a.py:10:second match",
+        )
+        result = _compress_grep(lines)
+        assert b"--\n" in result
+
+    def test_single_file_grep_no_path_prefix_passes_through(self):
+        # grep without -H or rg with single file: output is `lineno:content` only,
+        # no file path. The regex won't match → lines pass through unchanged.
+        lines = self._lines(
+            "152:    def test_get_placeholder_deprecation(self):",
+            "167:    def test_get_placeholder_sql_shim(self):",
+        )
+        result = _compress_grep(lines)
+        assert result == lines  # no compression, no omission hints
+
+    def test_dedup_within_file_not_across_files(self):
+        # The same match content in two different files must NOT be deduplicated —
+        # dedup is per-file only.
+        shared_sig = "    def get_placeholder_sql(self, value, compiler, connection):"
+        lines = self._lines(
+            f"array.py:127:{shared_sig}",
+            f"ranges.py:87:{shared_sig}",
+        )
+        result = _compress_grep(lines)
+        output = b"".join(result)
+        # Both lines must survive
+        assert b"array.py:127:" in output
+        assert b"ranges.py:87:" in output
+        assert b"omitted" not in output
+
+    def test_line_number_hint_truncated_at_ten(self):
+        # When more than 10 matches are capped, hint shows first 10 line numbers + count.
+        lines = [
+            f"big.py:{i}:match content {i}".encode() + b"\n"
+            for i in range(1, MAX_MATCHES_PER_FILE + 16)  # 5 kept, 15 capped
+        ]
+        result = _compress_grep(lines)
+        output = b"".join(result)
+        # Should show 10 line numbers then (+5 more)
+        assert b"(+5 more)" in output
+        assert b"over cap at lines" in output
+
+    def test_binary_match_notice_passes_through(self):
+        # rg emits lines like "Binary file foo.bin matches" for binary hits.
+        # These don't match the regex and must pass through.
+        lines = self._lines(
+            "Binary file django/db/models/sql/compiler.pyc matches",
+            "a.py:1:normal match",
+        )
+        result = _compress_grep(lines)
+        output = b"".join(result)
+        assert b"Binary file" in output
+        assert b"a.py:1:" in output
 
 
 # ---------------------------------------------------------------------------
@@ -276,26 +449,37 @@ class TestCatCompressor:
         result = _compress_cat(input_lines)
         assert all(l.strip() for l in result)
 
-    def test_strips_hash_comments(self):
+    def test_strips_hash_comments_in_python_files(self):
+        # Python files: inline # comments are stripped.
         input_lines = lines("# comment", "code", "# another comment")
-        result = _compress_cat(input_lines)
+        result = _compress_cat(input_lines, filename="module.py")
         assert all(not l.strip().startswith(b"#") for l in result)
         assert b"code\n" in result
 
-    def test_strips_double_slash_comments(self):
-        input_lines = lines("// comment", "code line")
-        result = _compress_cat(input_lines)
-        assert not any(b"//" in l for l in result)
+    def test_preserves_hash_in_non_python_files(self):
+        # Shell scripts and other formats use # for meaningful content.
+        input_lines = lines("#!/usr/bin/env bash", "echo hello", "# shellcheck disable=SC2086")
+        result = _compress_cat(input_lines, filename="run.sh")
+        assert b"#!/usr/bin/env bash\n" in result
+        assert b"# shellcheck disable=SC2086\n" in result
 
-    def test_strips_dash_dash_comments(self):
-        input_lines = lines("-- sql comment", "SELECT 1")
-        result = _compress_cat(input_lines)
-        assert not any(l.strip().startswith(b"--") for l in result)
+    def test_preserves_double_slash_comments(self):
+        # // is meaningful in JS/TS/C — must not be stripped.
+        input_lines = lines("// @ts-ignore", "const x = 1;")
+        result = _compress_cat(input_lines, filename="index.ts")
+        assert any(b"//" in l for l in result)
 
-    def test_strips_star_comments(self):
-        input_lines = lines("* javadoc line", "actual code")
-        result = _compress_cat(input_lines)
-        assert not any(l.strip().startswith(b"*") for l in result)
+    def test_preserves_dash_dash_comments(self):
+        # -- is a SQL comment — must not be stripped from .sql files.
+        input_lines = lines("-- drop table users;", "SELECT 1")
+        result = _compress_cat(input_lines, filename="migration.sql")
+        assert any(l.strip().startswith(b"--") for l in result)
+
+    def test_preserves_star_lines(self):
+        # * is used in Markdown bullets and JSDoc — must not be stripped.
+        input_lines = lines("* bullet point", "* @param foo", "actual code")
+        result = _compress_cat(input_lines, filename="README.md")
+        assert any(l.strip().startswith(b"*") for l in result)
 
     def test_truncates_at_500(self):
         input_lines = lines(*[f"line {i}" for i in range(600)])
@@ -755,8 +939,8 @@ class TestCompressionHeader:
     def test_header_present_when_lines_reduced(self):
         """When compression meaningfully reduces line count, a header appears."""
         env = {"WUMW_SESSION": "test-header-reduced"}
-        # cat compressor strips comment and blank lines — use a file full of them
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".txt") as f:
+        # cat compressor strips # comment lines in .py files — use a .py file full of them
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".py") as f:
             # 50 comment lines + 1 code line → should reduce
             f.write(b"# comment\n" * 50 + b"code = 1\n")
             tmpname = f.name
@@ -898,8 +1082,8 @@ class TestJsonlLogging:
 
     def test_log_compressed_lines_present_when_reduced(self):
         """compressed_lines field should appear when compression reduced output."""
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".txt") as f:
-            # Many hash comments — cat compressor will strip them all
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".py") as f:
+            # Many hash comments — cat compressor strips them in .py files
             f.write(b"# comment\n" * 50 + b"code\n")
             tmpname = f.name
         try:
@@ -1072,7 +1256,7 @@ class TestCompressAPI:
 
     def test_cat_dispatches_correctly(self):
         data = b"# comment\n" * 10 + b"code\n"
-        compressed, orig, comp = compress("cat", data)
+        compressed, orig, comp = compress("cat", data, args=["module.py"])
         assert comp < orig
 
     def test_rg_dispatches_correctly(self):
