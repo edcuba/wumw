@@ -336,7 +336,23 @@ def _compress_grep(lines: list[bytes], **kwargs) -> list[bytes]:
 
 _GIT_LOG_SHA_RE = re.compile(rb'^commit [0-9a-f]{7,40}')
 _GIT_LOG_ONELINE_RE = re.compile(rb'^[0-9a-f]{7,40} ')
+# Graph prefix: optional leading graph chars (* | / \ ) before the sha or "commit"
+_GIT_LOG_GRAPH_PREFIX_RE = re.compile(rb'^[*|/\\ ]+')
 _HUNK_HEADER_RE = re.compile(rb'@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@')
+
+
+def _git_log_strip_graph(line: bytes) -> bytes:
+    """Strip leading graph decoration characters from a git log --graph line."""
+    m = _GIT_LOG_GRAPH_PREFIX_RE.match(line)
+    if m:
+        return line[m.end():]
+    return line
+
+
+def _is_git_log_line(line: bytes) -> bool:
+    """Return True if line looks like the start of a git log entry (any supported format)."""
+    stripped = _git_log_strip_graph(line)
+    return bool(_GIT_LOG_SHA_RE.match(stripped) or _GIT_LOG_ONELINE_RE.match(stripped))
 
 
 @register("git")
@@ -346,7 +362,8 @@ def _compress_git(lines: list[bytes], **kwargs) -> list[bytes]:
 
     For diff output (detected by 'diff --git' or '--- ' headers):
     strip metadata noise and compress oversized hunks for review.
-    For log output (detected by 'commit <sha>' lines): limit entries.
+    For log output (detected by 'commit <sha>' lines, oneline '<sha> <msg>',
+    or graph-decorated variants): limit entries.
     """
     # Detect diff output
     is_diff = any(
@@ -356,11 +373,9 @@ def _compress_git(lines: list[bytes], **kwargs) -> list[bytes]:
     if is_diff:
         return _compress_git_diff(lines)
 
-    # Detect log output (standard or oneline format)
-    is_log = any(
-        _GIT_LOG_SHA_RE.match(l) or _GIT_LOG_ONELINE_RE.match(l)
-        for l in lines[:5]
-    )
+    # Detect log output (standard, oneline, or graph-decorated format).
+    # Check first 10 lines to handle leading blank lines in graph output.
+    is_log = any(_is_git_log_line(l) for l in lines[:10])
     if is_log:
         return _compress_git_log(lines)
 
@@ -368,18 +383,72 @@ def _compress_git(lines: list[bytes], **kwargs) -> list[bytes]:
 
 
 def _compress_git_log(lines: list[bytes]) -> list[bytes]:
-    """Limit git log output to MAX_LOG_ENTRIES commits."""
+    """
+    Limit git log output to MAX_LOG_ENTRIES commits.
+
+    Handles the following formats (detected automatically):
+
+    - Standard:  ``commit <sha>`` header followed by Author/Date/body/stats.
+      ``--stat`` output uses this format; stat lines within an entry are kept.
+    - Oneline:   ``<sha> <message>`` — one line per commit (e.g. ``--oneline``
+      or ``--format='%h %s'``).
+    - Graph:     graph decoration characters (``* | / \\ ``) prefix each line.
+      Works with both standard (``* commit <sha>``) and oneline
+      (``* <sha> <msg>``) graph-decorated output.
+    """
     max_entries = _git_log_entries()
 
-    # Oneline format: each line is one entry
-    if lines and _GIT_LOG_ONELINE_RE.match(lines[0]):
+    if not lines:
+        return []
+
+    # Check whether any line carries graph decoration
+    is_graph = any(
+        _GIT_LOG_GRAPH_PREFIX_RE.match(l) and l.strip() and not l.strip().startswith(b"commit ")
+        for l in lines[:15]
+    )
+
+    # Determine format from first non-empty line after stripping graph chars
+    first_stripped = None
+    for l in lines:
+        s = _git_log_strip_graph(l)
+        if s.strip():
+            first_stripped = s
+            break
+
+    if first_stripped is None:
+        return lines
+
+    is_standard = bool(_GIT_LOG_SHA_RE.match(first_stripped))
+    is_oneline = (
+        bool(_GIT_LOG_ONELINE_RE.match(first_stripped)) and not is_standard
+    )
+
+    if is_oneline and not is_graph:
+        # Pure oneline format: one line per commit, just slice
         return lines[:max_entries]
 
-    # Standard format: entries are blocks starting with "commit <sha>"
-    result: list[bytes] = []
+    if is_oneline and is_graph:
+        # Graph-decorated oneline: ``* <sha> <msg>`` lines are entry boundaries.
+        # Decoration-only lines (``|``, ``/``, ``\``) belong to the current entry.
+        result: list[bytes] = []
+        entry_count = 0
+        for line in lines:
+            stripped = _git_log_strip_graph(line)
+            if _GIT_LOG_ONELINE_RE.match(stripped):
+                if entry_count >= max_entries:
+                    break
+                entry_count += 1
+            result.append(line)
+        return result
+
+    # Standard or graph-decorated standard format: entries begin at "commit <sha>"
+    # (after stripping graph chars).  All lines within an entry (author, date,
+    # body, stat lines) are preserved — only the entry count is capped.
+    result = []
     entry_count = 0
     for line in lines:
-        if _GIT_LOG_SHA_RE.match(line):
+        stripped = _git_log_strip_graph(line)
+        if _GIT_LOG_SHA_RE.match(stripped):
             if entry_count >= max_entries:
                 break
             entry_count += 1

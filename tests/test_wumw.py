@@ -24,6 +24,7 @@ from wumw.compress import (
     _compress_git_diff,
     _compress_git_log,
     _compress_listing,
+    _git_log_strip_graph,
     MAX_MATCHES_PER_FILE,
     MAX_CONTEXT_LINES,
     CAT_OUTLINE_THRESHOLD,
@@ -828,6 +829,137 @@ class TestGitLogCompressor:
         result = _compress_git_log(input_lines)
 
         assert len(result) == 3
+
+    # --stat variant ----------------------------------------------------------
+
+    def _make_stat_log(self, n):
+        """Build git log --stat output: standard headers + stat lines per entry."""
+        lines_out = []
+        for i in range(n):
+            sha = f"{'a' * 40}"
+            lines_out.append(f"commit {sha}\n".encode())
+            lines_out.append(b"Author: Test <t@t.com>\n")
+            lines_out.append(b"Date:   Mon Jan 1 00:00:00 2024\n")
+            lines_out.append(b"\n")
+            lines_out.append(f"    Message {i}\n".encode())
+            lines_out.append(b"\n")
+            lines_out.append(b" src/foo.py | 3 +++\n")
+            lines_out.append(b" src/bar.py | 1 +\n")
+            lines_out.append(b" 2 files changed, 4 insertions(+)\n")
+            lines_out.append(b"\n")
+        return lines_out
+
+    def test_stat_log_capped_at_20(self):
+        """--stat output is detected and capped; stat lines within entries are preserved."""
+        input_lines = self._make_stat_log(25)
+        result = _compress_git_log(input_lines)
+        commit_count = sum(1 for l in result if l.startswith(b"commit "))
+        assert commit_count == MAX_LOG_ENTRIES
+
+    def test_stat_log_preserves_stat_lines_within_entry(self):
+        """Stat lines (path | N +++/---) inside an entry are not stripped."""
+        input_lines = self._make_stat_log(2)
+        result = _compress_git_log(input_lines)
+        stat_lines = [l for l in result if b" | " in l and b"+++" in l]
+        assert len(stat_lines) == 2  # one stat line per entry, both kept
+
+    def test_stat_dispatch_from_compress_git(self):
+        """_compress_git dispatches --stat output to the log compressor."""
+        input_lines = self._make_stat_log(25)
+        result = _compress_git(input_lines)
+        commit_count = sum(1 for l in result if l.startswith(b"commit "))
+        assert commit_count == MAX_LOG_ENTRIES
+
+    # --graph variant ---------------------------------------------------------
+
+    def _make_graph_log(self, n):
+        """Build git log --graph output with graph decoration characters."""
+        lines_out = []
+        for i in range(n):
+            sha = f"{'a' * 7}{i:033d}"
+            lines_out.append(f"* commit {sha}\n".encode())
+            lines_out.append(b"| Author: Test <t@t.com>\n")
+            lines_out.append(b"| Date:   Mon Jan 1 00:00:00 2024\n")
+            lines_out.append(b"|\n")
+            lines_out.append(f"|     Message {i}\n".encode())
+            lines_out.append(b"|\n")
+        return lines_out
+
+    def test_graph_log_capped_at_20(self):
+        """--graph output is detected and capped at MAX_LOG_ENTRIES."""
+        input_lines = self._make_graph_log(25)
+        result = _compress_git_log(input_lines)
+        commit_count = sum(
+            1 for l in result if _git_log_strip_graph(l).startswith(b"commit ")
+        )
+        assert commit_count == MAX_LOG_ENTRIES
+
+    def test_graph_log_under_limit_unchanged(self):
+        input_lines = self._make_graph_log(5)
+        result = _compress_git_log(input_lines)
+        commit_count = sum(
+            1 for l in result if _git_log_strip_graph(l).startswith(b"commit ")
+        )
+        assert commit_count == 5
+
+    def test_graph_log_preserves_graph_decoration(self):
+        """Graph decoration lines (|, /) are kept verbatim."""
+        input_lines = self._make_graph_log(3)
+        result = _compress_git_log(input_lines)
+        graph_lines = [l for l in result if l.startswith(b"| ") or l.startswith(b"|\n")]
+        assert len(graph_lines) > 0
+
+    def test_graph_dispatch_from_compress_git(self):
+        """_compress_git dispatches --graph output to the log compressor."""
+        input_lines = self._make_graph_log(25)
+        result = _compress_git(input_lines)
+        commit_count = sum(
+            1 for l in result if _git_log_strip_graph(l).startswith(b"commit ")
+        )
+        assert commit_count == MAX_LOG_ENTRIES
+
+    def test_graph_respects_env_entry_override(self, monkeypatch):
+        monkeypatch.setenv("WUMW_GIT_LOG_ENTRIES", "3")
+        input_lines = self._make_graph_log(8)
+        result = _compress_git_log(input_lines)
+        commit_count = sum(
+            1 for l in result if _git_log_strip_graph(l).startswith(b"commit ")
+        )
+        assert commit_count == 3
+
+    # --format / --pretty variant ---------------------------------------------
+
+    def _make_format_log(self, n, fmt="%h %s"):
+        """Build git log --format='%h %s' output: short-sha + subject per line."""
+        return [f"{'a' * 7} Commit message {i}\n".encode() for i in range(n)]
+
+    def test_format_log_capped_at_20(self):
+        """--format='%h %s' matches oneline detection and is capped."""
+        input_lines = self._make_format_log(30)
+        result = _compress_git_log(input_lines)
+        assert len(result) == MAX_LOG_ENTRIES
+
+    def test_format_log_under_limit_unchanged(self):
+        input_lines = self._make_format_log(10)
+        result = _compress_git_log(input_lines)
+        assert len(result) == 10
+
+    def test_format_dispatch_from_compress_git(self):
+        """_compress_git dispatches --format='%h %s' style output to log compressor."""
+        input_lines = self._make_format_log(30)
+        result = _compress_git(input_lines)
+        assert len(result) == MAX_LOG_ENTRIES
+
+    def test_format_graph_log_capped(self):
+        """--graph --format combined: graph-decorated short-sha lines are capped."""
+        lines_out = []
+        for i in range(25):
+            lines_out.append(f"* {'a' * 7} Commit {i}\n".encode())
+            lines_out.append(b"|\n")
+        result = _compress_git_log(lines_out)
+        # Each commit is on a line starting with "* <sha>"
+        commit_lines = [l for l in result if l.startswith(b"* ")]
+        assert len(commit_lines) == MAX_LOG_ENTRIES
 
 
 # ---------------------------------------------------------------------------
