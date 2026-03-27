@@ -441,6 +441,230 @@ class TestGrepCompressorRealWorld:
 
 
 # ---------------------------------------------------------------------------
+# 2c. rg/grep compressor — realistic multi-file scenario
+# ---------------------------------------------------------------------------
+
+class TestGrepCompressorMultiFile:
+    """
+    Realistic multi-file scenario: >5 files, >5 matches/file, mix of hits and
+    misses (some files with few matches, some with many, some with duplicates).
+
+    Validates:
+      (a) caps at 5 matches/file
+      (b) per-file omission hints include line numbers
+      (c) no dangling '--' separators
+      (d) deduplication works within (not across) files
+    """
+
+    def _make_match(self, filepath, lineno, content):
+        return f"{filepath}:{lineno}:{content}".encode() + b"\n"
+
+    def _make_context(self, filepath, lineno, content):
+        return f"{filepath}:{lineno}-{content}".encode() + b"\n"
+
+    def _build_scenario(self):
+        """
+        Build a realistic multi-file rg output simulating:
+          src/auth.py      — 8 unique matches (over cap)
+          src/models.py    — 5 unique matches (exactly at cap)
+          src/views.py     — 3 unique matches (under cap, no hint needed)
+          src/utils.py     — 7 matches, 3 of which are duplicates of earlier content
+          src/signals.py   — 9 matches (over cap, no duplicates)
+          src/admin.py     — 2 matches (under cap)
+          src/serializers.py — 6 matches (over cap by 1)
+        Groups are separated by '--' as rg emits in multi-file mode with context.
+        """
+        rows = []
+
+        # src/auth.py: 8 matches over cap, with one context line after first match
+        for i in range(1, 9):
+            rows.append(self._make_match("src/auth.py", i * 10, f"    def check_permission_{i}(self, user):"))
+        rows.append(b"--\n")
+
+        # src/models.py: exactly 5 matches — no omission hint expected
+        for i in range(1, 6):
+            rows.append(self._make_match("src/models.py", i * 5, f"    token = models.CharField(max_length={i * 10})"))
+        rows.append(b"--\n")
+
+        # src/views.py: 3 matches — well under cap, no truncation
+        rows.append(self._make_match("src/views.py", 12, "    if not request.user.is_authenticated:"))
+        rows.append(self._make_match("src/views.py", 45, "    return redirect('login')"))
+        rows.append(self._make_match("src/views.py", 99, "    raise PermissionDenied"))
+        rows.append(b"--\n")
+
+        # src/utils.py: 7 matches, first 2 appear again as duplicates (lines 70, 80)
+        rows.append(self._make_match("src/utils.py", 11, "    return hash_password(raw)"))
+        rows.append(self._make_match("src/utils.py", 22, "    verify_token(token, secret)"))
+        rows.append(self._make_match("src/utils.py", 33, "    check_expiry(ts)"))
+        rows.append(self._make_match("src/utils.py", 44, "    rotate_key(user_id)"))
+        rows.append(self._make_match("src/utils.py", 55, "    audit_log(action, user)"))
+        # duplicate content: same as lines 11 and 22 above
+        rows.append(self._make_match("src/utils.py", 70, "    return hash_password(raw)"))
+        rows.append(self._make_match("src/utils.py", 80, "    verify_token(token, secret)"))
+        rows.append(b"--\n")
+
+        # src/signals.py: 9 unique matches over cap, with a context line between groups
+        rows.append(self._make_match("src/signals.py", 5, "post_save.connect(on_user_save, sender=User)"))
+        rows.append(self._make_context("src/signals.py", 6, "    # user registration hook"))
+        rows.append(self._make_match("src/signals.py", 20, "post_delete.connect(on_user_delete, sender=User)"))
+        rows.append(b"--\n")
+        rows.append(self._make_context("src/signals.py", 30, "    # pre-context for next hit"))
+        rows.append(self._make_match("src/signals.py", 31, "pre_save.connect(on_profile_save, sender=Profile)"))
+        rows.append(self._make_match("src/signals.py", 45, "m2m_changed.connect(on_tags_changed, sender=Tag)"))
+        rows.append(self._make_match("src/signals.py", 60, "post_migrate.connect(create_defaults, sender=AppConfig)"))
+        # over cap from here
+        rows.append(self._make_match("src/signals.py", 75, "pre_delete.connect(cleanup_files, sender=Document)"))
+        rows.append(self._make_match("src/signals.py", 90, "post_save.connect(notify_admin, sender=Report)"))
+        rows.append(self._make_match("src/signals.py", 105, "pre_save.connect(validate_slug, sender=Article)"))
+        rows.append(self._make_match("src/signals.py", 120, "post_delete.connect(remove_cache, sender=Post)"))
+        rows.append(b"--\n")
+
+        # src/admin.py: 2 matches — under cap
+        rows.append(self._make_match("src/admin.py", 8, "    list_filter = ('is_active', 'is_staff')"))
+        rows.append(self._make_match("src/admin.py", 22, "    search_fields = ('username', 'email')"))
+        rows.append(b"--\n")
+
+        # src/serializers.py: 6 matches — over cap by 1
+        for i in range(1, 7):
+            rows.append(self._make_match("src/serializers.py", i * 15, f"    field_{i} = serializers.CharField()"))
+
+        return rows
+
+    def test_caps_at_five_matches_per_file(self):
+        """(a) Each file must have at most MAX_MATCHES_PER_FILE match lines kept."""
+        import re
+        _match_re = re.compile(rb'^(.+?):(\d+):(.*)')
+        rows = self._build_scenario()
+        result = _compress_grep(rows)
+
+        for filepath in (b"src/auth.py", b"src/signals.py", b"src/serializers.py"):
+            # Count only match lines (path:lineno:content), not context lines (path:lineno-content)
+            kept = [l for l in result if _match_re.match(l.rstrip(b'\n\r')) and l.startswith(filepath + b":")]
+            assert len(kept) <= MAX_MATCHES_PER_FILE, (
+                f"{filepath}: expected <= {MAX_MATCHES_PER_FILE} kept, got {len(kept)}"
+            )
+
+    def test_files_under_cap_kept_in_full(self):
+        """Files with fewer matches than cap are kept entirely."""
+        rows = self._build_scenario()
+        result = _compress_grep(rows)
+
+        # src/views.py: 3 matches
+        kept_views = [l for l in result if l.startswith(b"src/views.py:")]
+        assert len(kept_views) == 3
+
+        # src/admin.py: 2 matches
+        kept_admin = [l for l in result if l.startswith(b"src/admin.py:")]
+        assert len(kept_admin) == 2
+
+    def test_omission_hints_include_line_numbers(self):
+        """(b) Per-file omission hints must list the omitted line numbers."""
+        rows = self._build_scenario()
+        result = _compress_grep(rows)
+        output = b"".join(result)
+
+        # auth.py: 8 matches, 5 kept, 3 over-cap omitted
+        assert b"src/auth.py kept 5/8 matches" in output
+        assert b"over cap at lines" in output
+
+        # signals.py: 9 matches, 5 kept, 4 over-cap omitted
+        assert b"src/signals.py kept 5/9 matches" in output
+
+        # serializers.py: 6 matches, 5 kept, 1 over-cap omitted
+        assert b"src/serializers.py kept 5/6 matches" in output
+
+    def test_omission_hint_line_numbers_are_correct(self):
+        """(b) The omitted line numbers in hints should match the capped lines."""
+        rows = self._build_scenario()
+        result = _compress_grep(rows)
+        output = b"".join(result)
+
+        # serializers.py: lines 15, 30, 45, 60, 75 kept; 90 omitted
+        assert b"1 over cap at lines 90" in output
+
+    def test_no_dangling_separators(self):
+        """(c) '--' separators that precede only skipped matches must not appear."""
+        rows = self._build_scenario()
+        result = _compress_grep(rows)
+        output = b"".join(result)
+
+        # A dangling separator would be '--' immediately followed by '--' or
+        # only followed by omission hints. We check the harder invariant:
+        # no separator appears right before an omission summary line.
+        lines_out = output.split(b"\n")
+        for i, line in enumerate(lines_out):
+            if line == b"--":
+                # The next non-empty line must not be an omission hint
+                for j in range(i + 1, min(i + 5, len(lines_out))):
+                    if lines_out[j]:
+                        assert not lines_out[j].startswith(b"# wumw:"), (
+                            f"Dangling separator before omission hint at output line {j}"
+                        )
+                        break
+
+    def test_no_consecutive_separators(self):
+        """(c) Adjacent '--' separators must not appear in output."""
+        rows = self._build_scenario()
+        result = _compress_grep(rows)
+        prev_was_sep = False
+        for line in result:
+            is_sep = line.rstrip(b"\n\r") == b"--"
+            assert not (is_sep and prev_was_sep), "Consecutive '--' separators in output"
+            prev_was_sep = is_sep
+
+    def test_deduplication_within_file(self):
+        """(d) Duplicate match content within the same file is deduplicated."""
+        rows = self._build_scenario()
+        result = _compress_grep(rows)
+        output = b"".join(result)
+
+        # utils.py: 7 matches, 2 are duplicates. 5 unique → kept 5, omit 2 dup.
+        assert b"src/utils.py kept 5/7 matches" in output
+        assert b"2 duplicate" in output
+
+    def test_deduplication_not_across_files(self):
+        """(d) The same content in different files must not be deduplicated."""
+        shared = "    def connect(self, signal, handler):"
+        rows = [
+            self._make_match("a/signals.py", 10, shared),
+            self._make_match("b/signals.py", 20, shared),
+        ]
+        result = _compress_grep(rows)
+        output = b"".join(result)
+
+        assert b"a/signals.py:10:" in output
+        assert b"b/signals.py:20:" in output
+        # No omission hints — both kept
+        assert b"omitted" not in output
+
+    def test_exactly_at_cap_no_hint(self):
+        """Files with exactly MAX_MATCHES_PER_FILE unique matches emit no omission hint."""
+        rows = self._build_scenario()
+        result = _compress_grep(rows)
+        output = b"".join(result)
+
+        # src/models.py has exactly 5 unique matches — no hint expected
+        assert b"src/models.py kept" not in output
+
+    def test_output_has_matches_from_all_files(self):
+        """All 7 source files must be represented in the output."""
+        rows = self._build_scenario()
+        result = _compress_grep(rows)
+        output = b"".join(result)
+
+        for filepath in (
+            b"src/auth.py",
+            b"src/models.py",
+            b"src/views.py",
+            b"src/utils.py",
+            b"src/signals.py",
+            b"src/admin.py",
+            b"src/serializers.py",
+        ):
+            assert filepath in output, f"{filepath} missing from compressed output"
+
+
+# ---------------------------------------------------------------------------
 # 3. cat compressor — strips comments/blanks, truncates at 500 lines
 # ---------------------------------------------------------------------------
 

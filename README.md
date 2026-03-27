@@ -61,6 +61,39 @@ Use `wumw` selectively, not as a blanket prefix for every command.
 - If compression hides needed detail, rerun the same command with `wumw --full ...`.
 - In sandboxes or read-only environments, set `WUMW_HOME` to a writable directory such as `/tmp/wumw`.
 
+### Usage example: wumw rg multi-file search
+
+```
+$ wumw rg "connect" src/ -n
+```
+
+Compressed output (cap 5 matches/file, duplicates deduplicated):
+
+```
+src/signals.py:5:post_save.connect(on_user_save, sender=User)
+src/signals.py:6-    # user registration hook
+src/signals.py:20:post_delete.connect(on_user_delete, sender=User)
+--
+src/signals.py:31:pre_save.connect(on_profile_save, sender=Profile)
+src/signals.py:45:m2m_changed.connect(on_tags_changed, sender=Tag)
+src/signals.py:60:post_migrate.connect(create_defaults, sender=AppConfig)
+# wumw: src/signals.py kept 5/9 matches; 4 more matches omitted (4 over cap at lines 75, 90, 105, 120)
+src/utils.py:11:    return hash_password(raw)
+src/utils.py:22:    verify_token(token, secret)
+src/utils.py:33:    check_expiry(ts)
+src/utils.py:44:    rotate_key(user_id)
+src/utils.py:55:    audit_log(action, user)
+# wumw: src/utils.py kept 5/7 matches; 2 more matches omitted (2 duplicate)
+```
+
+Key behaviours:
+
+- Each file is capped independently at `WUMW_RG_CAP` (default 5) match lines.
+- Omission hints list the capped line numbers so you can jump directly with `sed -n 'N,Mp' file`.
+- Duplicate match content within the same file is collapsed (but the same content in different files is kept).
+- `--` group separators are only emitted when a kept match follows; no dangling separators appear.
+- Use `wumw --full rg ...` to bypass compression when you need every match.
+
 Threshold overrides are read from the environment on each invocation, for example:
 
 ```bash
