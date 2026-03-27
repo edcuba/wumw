@@ -51,6 +51,24 @@ FORCED_READ_TREATMENT_PROMPT = (
     "Do not make any code changes."
 )
 
+_FEATURE_IMPL_TASK_PATH = Path(__file__).parent / "feature_impl_task.md"
+
+FEATURE_IMPL_BASELINE_PROMPT = (
+    "Ignore any repository guidance about wumw for this run. "
+    "Do not invoke `wumw` or `wumw --full`. "
+    "Use standard shell commands: cat, grep, git.\n\n"
+    + _FEATURE_IMPL_TASK_PATH.read_text()
+)
+
+FEATURE_IMPL_TREATMENT_PROMPT = (
+    "Prefix all file-reading and search commands with `wumw`: "
+    "use `wumw cat file`, `wumw grep pattern dir`. "
+    "`wumw` compresses large output to fit in context. "
+    "If the compressed output omits lines you need, use `sed -n 'START,ENDp' file` to read that range directly — "
+    "the omission notes include line numbers to guide you.\n\n"
+    + _FEATURE_IMPL_TASK_PATH.read_text()
+)
+
 BASELINE_PREFIX = (
     "Ignore any repository guidance about wumw for this run. "
     "Do not invoke `wumw` or `wumw --full`. "
@@ -91,6 +109,7 @@ class VariantResult:
     final_message: str
     wumw_session_path: Path | None
     wumw_savings: dict | None
+    hidden_test_passed: bool | None = None
 
 
 def serialize_result(result: VariantResult) -> dict:
@@ -108,6 +127,7 @@ def serialize_result(result: VariantResult) -> dict:
         "final_message_path": str(result.final_message_path),
         "wumw_session_path": str(result.wumw_session_path) if result.wumw_session_path else None,
         "wumw_savings": result.wumw_savings,
+        "hidden_test_passed": result.hidden_test_passed,
     }
 
 
@@ -221,6 +241,23 @@ def summarize_wumw_session(path: Path) -> dict:
         "effective_tokens_estimate": eff_bytes / 4.0,
         "saved_tokens_estimate": (raw_bytes - eff_bytes) / 4.0,
     }
+
+
+_HIDDEN_TEST_PATH = Path(__file__).parent / "hidden_test_feature_impl.py"
+
+
+def run_feature_impl_test(repo: Path) -> bool:
+    """Reset the repo working copy, then run the hidden unit test. Returns True on pass."""
+    # Reset any implementation changes the agent made (but keep untracked files).
+    subprocess.run(["git", "checkout", "--", "."], cwd=repo, check=False, capture_output=True)
+    result = subprocess.run(
+        [sys.executable, str(_HIDDEN_TEST_PATH)],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "DJANGO_REPO": str(repo)},
+    )
+    return result.returncode == 0
 
 
 def parse_events(path: Path) -> dict:
@@ -512,12 +549,20 @@ def write_report(path: Path, repo: Path, base: str, trials: list[dict]) -> None:
 
 
 def print_variant_details(results: list[VariantResult]) -> None:
-    print("variant\treturncode\tinput_tokens\tcached_input\toutput_tokens\tcommands\twumw_cmds")
+    has_test = any(r.hidden_test_passed is not None for r in results)
+    header = "variant\treturncode\tinput_tokens\tcached_input\toutput_tokens\tcommands\twumw_cmds"
+    if has_test:
+        header += "\thidden_test"
+    print(header)
     for r in results:
-        print(
+        row = (
             f"{r.name}\t{r.returncode}\t{r.input_tokens}\t{r.cached_input_tokens}\t"
             f"{r.output_tokens}\t{r.command_count}\t{r.wumw_command_count}"
         )
+        if has_test:
+            test_str = "PASS" if r.hidden_test_passed else "FAIL" if r.hidden_test_passed is False else "n/a"
+            row += f"\t{test_str}"
+        print(row)
     print()
     for r in results:
         print(f"== {r.name} ==")
@@ -580,12 +625,14 @@ def main() -> int:
     parser.add_argument("--runner", choices=["claude", "codex"], default="claude")
     parser.add_argument(
         "--task",
-        choices=["pr-review", "forced-read"],
+        choices=["pr-review", "forced-read", "feature-impl"],
         default="pr-review",
         help=(
             "Task type: 'pr-review' (default) reviews commits on the branch; "
             "'forced-read' asks both agents to summarize a large file "
-            f"({FORCED_READ_TARGET}) — compression is the only variable."
+            f"({FORCED_READ_TARGET}) — compression is the only variable; "
+            "'feature-impl' asks both agents to implement Field.choices_display() "
+            "in benchmarks/django, then runs the hidden unit test to check correctness."
         ),
     )
     parser.add_argument(
@@ -630,6 +677,15 @@ def main() -> int:
                 prompt_override=FORCED_READ_TREATMENT_PROMPT,
                 instruction_prefix="",
             )
+        elif args.task == "feature-impl":
+            baseline_kwargs = dict(
+                prompt_override=FEATURE_IMPL_BASELINE_PROMPT,
+                instruction_prefix="",
+            )
+            treatment_kwargs = dict(
+                prompt_override=FEATURE_IMPL_TREATMENT_PROMPT,
+                instruction_prefix="",
+            )
         else:
             baseline_kwargs = dict(instruction_prefix=BASELINE_PREFIX)
             treatment_kwargs = dict(instruction_prefix=TREATMENT_PREFIX)
@@ -639,7 +695,7 @@ def main() -> int:
         order_label = "treatment-first" if treatment_first else "baseline-first"
 
         def _make_variant(name, kwargs):
-            return run_variant(
+            result = run_variant(
                 name=name,
                 repo=args.repo,
                 base=args.base,
@@ -647,6 +703,12 @@ def main() -> int:
                 runner=args.runner,
                 **kwargs,
             )
+            if args.task == "feature-impl":
+                result.hidden_test_passed = run_feature_impl_test(args.repo)
+                print(
+                    f"  {name} hidden test: {'PASS' if result.hidden_test_passed else 'FAIL'}"
+                )
+            return result
 
         if treatment_first:
             v1 = _make_variant("treatment_with_wumw", treatment_kwargs)
