@@ -1486,3 +1486,21 @@ class TestSavings:
         )
 
         assert [entry["command"] for entry in entries] == ["rg"]
+
+
+# ---------------------------------------------------------------------------
+# CLI --version flag
+# ---------------------------------------------------------------------------
+
+class TestCLIVersion:
+    def test_version_exits_zero_and_matches_pattern(self):
+        result = subprocess.run(
+            ["wumw", "--version"],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0
+        import re
+        assert re.search(r"wumw \d", result.stdout), (
+            f"Expected 'wumw <version>' in stdout, got: {result.stdout!r}"
+        )

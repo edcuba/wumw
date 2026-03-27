@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 from datetime import datetime, timezone
+from importlib.metadata import version, PackageNotFoundError
 
 from wumw.compress import compress
 from wumw.state import get_state_dir, get_session_info
@@ -102,6 +103,13 @@ def main():
     argv = sys.argv[1:]
     if argv[0] in ("--help", "-h"):
         print(_HELP, end="")
+        sys.exit(0)
+    if argv[0] == "--version":
+        try:
+            v = version("wumw")
+        except PackageNotFoundError:
+            v = "unknown"
+        print(f"wumw {v}")
         sys.exit(0)
     if argv[0] == "--full":
         full = True
